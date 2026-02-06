@@ -29,6 +29,9 @@ _current_hwp: Optional[HwpController] = None
 _current_path: Optional[str] = None
 
 
+# -------- 내부 유틸 --------
+
+
 def _call_ai_server(text: str, mode: Mode = "rewrite") -> str:
     if not text.strip():
         return text
@@ -123,3 +126,118 @@ def rewrite_current_document(mode: Mode = "rewrite") -> None:
             print(f"[ENGINE] 문서를 저장했습니다: {_current_path}")
         else:
             print(f"[ENGINE] 문서 저장 실패: {_current_path}")
+
+
+def get_cursor_position_meta() -> dict | None:
+    """현재 커서 위치 메타데이터를 반환한다.
+
+    Returns:
+        dict | None: {"list_id": int, "para_id": int, "char_pos": int}
+    """
+    hwp = ensure_connected()
+    return hwp.get_cursor_pos()
+
+
+# -------- 선택 영역 기반 v0 (클립보드 이용) --------
+
+
+def get_selection_text_via_clipboard() -> str:
+    """현재 한글에서 사용자가 선택한 영역의 텍스트를 클립보드로부터 가져온다.
+
+    전제:
+    - 사용자가 한글 문서에서 이미 드래그/선택을 해둔 상태
+    동작:
+    - 엔진이 한글 창을 활성화
+    - Ctrl+C 키 입력을 보내서 선택된 내용을 클립보드에 복사
+    - 클립보드에서 텍스트를 읽어 반환
+    """
+    import win32clipboard
+    import win32gui
+    import win32api
+    import win32con
+    import time
+
+    hwp = ensure_connected()
+
+    # 한글 창 활성화
+    try:
+        hwnd = hwp.hwp.XHwpWindows.Item(0).WindowHandle
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(hwnd)
+        time.sleep(0.1)
+    except Exception as e_hwnd:
+        print(f"[ENGINE] 선택 영역용 윈도우 활성화 실패(무시하고 진행): {e_hwnd}")
+
+    # Ctrl+C 키 이벤트 전송
+    try:
+        win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+        win32api.keybd_event(ord("C"), 0, 0, 0)
+        time.sleep(0.05)
+        win32api.keybd_event(ord("C"), 0, win32con.KEYEVENTF_KEYUP, 0)
+        win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+        time.sleep(0.1)
+    except Exception as e_keys:
+        print(f"[ENGINE] Ctrl+C 키 이벤트 전송 실패: {e_keys}")
+
+    # 클립보드에서 텍스트 읽기
+    try:
+        win32clipboard.OpenClipboard()
+        try:
+            text = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+        finally:
+            win32clipboard.CloseClipboard()
+        return text or ""
+    except Exception as e_clip:
+        print(f"[ENGINE] 클립보드에서 선택 영역 텍스트 읽기 실패: {e_clip}")
+        return ""
+
+
+def apply_text_to_selection_via_clipboard(new_text: str) -> None:
+    """현재 선택된 영역에 new_text를 덮어쓴다 (클립보드 기반 v0).
+
+    방식:
+    - new_text를 클립보드에 넣고
+    - 한글 창 활성화 후 Ctrl+V 보내서 선택 영역을 덮어쓰기
+    """
+    import win32clipboard
+    import win32gui
+    import win32api
+    import win32con
+    import time
+
+    if not new_text:
+        print("[ENGINE] 적용할 텍스트가 비어 있습니다.")
+        return
+
+    hwp = ensure_connected()
+
+    # 클립보드에 새 텍스트 넣기
+    try:
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, new_text)
+        finally:
+            win32clipboard.CloseClipboard()
+    except Exception as e_clip:
+        print(f"[ENGINE] 클립보드에 텍스트 설정 실패: {e_clip}")
+        return
+
+    # 한글 창 활성화
+    try:
+        hwnd = hwp.hwp.XHwpWindows.Item(0).WindowHandle
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(hwnd)
+        time.sleep(0.1)
+    except Exception as e_hwnd:
+        print(f"[ENGINE] 선택 영역 적용용 윈도우 활성화 실패(무시하고 진행): {e_hwnd}")
+
+    # Ctrl+V 키 이벤트 전송 (선택 영역 덮어쓰기)
+    try:
+        win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+        win32api.keybd_event(ord("V"), 0, 0, 0)
+        time.sleep(0.05)
+        win32api.keybd_event(ord("V"), 0, win32con.KEYEVENTF_KEYUP, 0)
+        win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+    except Exception as e_keys:
+        print(f"[ENGINE] Ctrl+V 키 이벤트 전송 실패: {e_keys}")

@@ -680,6 +680,27 @@ class HwpController:
             logger.debug(f"SetPos 실패: {e}")
             return False
 
+    def get_cursor_pos(self):
+        """현재 커서 위치를 딕셔너리 형태로 반환합니다.
+
+        Returns:
+            dict | None: {"list_id": int, "para_id": int, "char_pos": int}
+        """
+        try:
+            pos = self._get_current_position()
+            if not pos:
+                return None
+            # pos: (position_type, list_id, para_id, char_pos)
+            _, list_id, para_id, char_pos = pos
+            return {
+                "list_id": list_id,
+                "para_id": para_id,
+                "char_pos": char_pos,
+            }
+        except Exception as e:
+            logger.debug(f"get_cursor_pos 실패: {e}")
+            return None
+
     def insert_table(self, rows: int, cols: int) -> bool:
         """
         현재 커서 위치에 표를 삽입합니다.
@@ -893,28 +914,37 @@ class HwpController:
             except Exception as e:
                 print(f"텍스트 가져오기 실패(GetTextFile): {e}")
 
-            # 2차 시도: 클립보드 기반 fallback
+            # 2차 시도: 클립보드 기반 fallback (윈도우에 실제 키 입력 보내기)
             try:
                 import win32clipboard
+                import win32gui
+                import win32api
+                import win32con
+                import time
 
-                # 문서 전체 선택 후 복사
+                # 한글 창을 전면으로 가져오기
                 try:
-                    self.hwp.Run("SelectAll")
-                except Exception:
-                    # 일부 버전 호환용: HAction 사용 시도
-                    try:
-                        self.hwp.HAction.Run("SelectAll")
-                    except Exception:
-                        pass
+                    hwnd = self.hwp.XHwpWindows.Item(0).WindowHandle
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                    win32gui.SetForegroundWindow(hwnd)
+                    time.sleep(0.2)
+                except Exception as e_hwnd:
+                    print(f"윈도우 활성화 실패(무시하고 진행): {e_hwnd}")
 
-                try:
-                    self.hwp.HAction.Run("Copy")
-                except Exception:
-                    try:
-                        self.hwp.Run("Copy")
-                    except Exception as e_copy:
-                        print(f"텍스트 복사 실패: {e_copy}")
-                        return ""
+                # Ctrl+A, Ctrl+C 실제 키 이벤트 전송
+                def send_ctrl_combo(vk: int):
+                    win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+                    win32api.keybd_event(vk, 0, 0, 0)
+                    time.sleep(0.05)
+                    win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
+                    win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+
+                # 전체 선택
+                send_ctrl_combo(ord('A'))
+                time.sleep(0.1)
+                # 복사
+                send_ctrl_combo(ord('C'))
+                time.sleep(0.1)
 
                 # 클립보드에서 텍스트 읽기
                 win32clipboard.OpenClipboard()
