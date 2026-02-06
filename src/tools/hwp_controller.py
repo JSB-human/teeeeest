@@ -688,7 +688,9 @@ class HwpController:
         """
         try:
             pos = self._get_current_position()
-            if not pos:
+            # GetPos()가 0이나 다른 falsy 값을 반환하는 경우가 있어
+            # None과만 구분해야 한다.
+            if pos is None:
                 return None
             # pos: (position_type, list_id, para_id, char_pos)
             _, list_id, para_id, char_pos = pos
