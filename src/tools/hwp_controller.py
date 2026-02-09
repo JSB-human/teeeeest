@@ -662,10 +662,19 @@ class HwpController:
             return False
 
     def _get_current_position(self):
-        """현재 커서 위치 정보를 가져옵니다."""
+        """현재 커서(캐럿) 위치 정보를 가져옵니다.
+
+        현재 연결된 HWP 인스턴스에서 GetPos()를 호출해
+        (position_type, list_id, para_id, char_pos)의 형태 또는
+        (list_id, para_id, char_pos) 형태의 값을 반환합니다.
+        """
         try:
-            # GetPos()는 현재 위치 정보를 (위치 유형, List ID, Para ID, CharPos)의 튜플로 반환
-            return self.hwp.GetPos()
+            if not self.is_hwp_running or not self.hwp:
+                return None
+            pos = self.hwp.GetPos()
+            # 디버깅용: 실제 반환값 확인
+            print("DEBUG RAW GetPos:", pos)
+            return pos
         except Exception as e:
             logger.debug(f"GetPos 실패: {e}")
             return None
@@ -688,12 +697,15 @@ class HwpController:
         """
         try:
             pos = self._get_current_position()
-            # GetPos()가 0이나 다른 falsy 값을 반환하는 경우가 있어
-            # None과만 구분해야 한다.
             if pos is None:
                 return None
-            # pos: (position_type, list_id, para_id, char_pos)
-            _, list_id, para_id, char_pos = pos
+
+            # GetPos 반환값이 3개(리스트, 문단, 문자오프셋)일 수도 있고
+            # 4개(위치 유형 포함)일 수도 있으므로, 항상 마지막 3개를 사용
+            list_id, para_id, char_pos = pos[-3:]
+
+            print("DEBUG get_cursor_pos RAW POS:", pos, "=>", list_id, para_id, char_pos)
+
             return {
                 "list_id": list_id,
                 "para_id": para_id,

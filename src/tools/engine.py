@@ -20,6 +20,7 @@ from typing import Literal, Optional
 import requests
 
 from .hwp_controller import HwpController
+from .hwp_table_tools import HwpTableTools, parse_table_data
 
 AI_SERVER_REWRITE = "http://127.0.0.1:5005/rewrite"
 Mode = Literal["rewrite", "summarize", "extend"]
@@ -135,7 +136,75 @@ def get_cursor_position_meta() -> dict | None:
         dict | None: {"list_id": int, "para_id": int, "char_pos": int}
     """
     hwp = ensure_connected()
-    return hwp.get_cursor_pos()
+    pos = hwp.get_cursor_pos()
+    print("DEBUG engine.get_cursor_position_meta ->", pos)
+    return pos
+
+
+# -------- 표(Table) 관련 고수준 헬퍼 --------
+
+
+def fill_current_table_from_json(data_str: str, has_header: bool = False) -> str:
+    """현재 커서가 위치한 표에 JSON 문자열로 전달된 데이터를 채운다.
+
+    이 함수는 `HwpTableTools`와 `parse_table_data`를 래핑해서,
+    UI나 AI 레이어에서 "표 데이터만" 넘기면 되도록 단순화한 헬퍼이다.
+
+    Args:
+        data_str: JSON 형식의 2차원 배열 문자열.
+            예시)
+            ```json
+            [
+              ["이름", "나이", "직업"],
+              ["홍길동", 30, "개발자"],
+              ["김영희", 28, "디자이너"]
+            ]
+            ```
+        has_header: 첫 번째 행을 헤더로 처리할지 여부.
+
+    Returns:
+        HwpTableTools.fill_table_with_data()가 반환하는 결과 메시지 문자열.
+
+    사용 예 (엔진을 직접 쓸 때):
+
+    ```python
+    from hwp_mcp.src.tools import engine
+
+    # (1) 먼저 문서를 연결하고, 한글에서 채울 표 안에 커서를 둔다.
+    engine.connect_document(r"C:\path\to\doc.hwp")
+
+    # (2) JSON 문자열을 준비한다. (AI가 생성해줄 수도 있음)
+    json_str = """
+    [
+      ["이름", "나이", "직업"],
+      ["홍길동", 30, "개발자"],
+      ["김영희", 28, "디자이너"]
+    ]
+    """.strip()
+
+    # (3) 현재 커서가 위치한 표의 (1,1) 셀부터 순서대로 채운다.
+    msg = engine.fill_current_table_from_json(json_str, has_header=True)
+    print(msg)  # "표 데이터 입력 완료" 등
+    ```
+    """
+    hwp = ensure_connected()
+
+    # JSON 문자열을 2차원 리스트로 파싱
+    data_list = parse_table_data(data_str)
+    if not data_list:
+        return "Error: 표 데이터 파싱 실패 또는 비어있는 데이터"
+
+    table_tools = HwpTableTools(hwp)
+
+    # 현재 전략: 커서가 이미 해당 표 안에 위치해 있다고 가정하고,
+    # 표의 (1,1)에서부터 데이터를 채운다.
+    # 나중에 필요하면 start_row/start_col을 파라미터로 확장 가능.
+    return table_tools.fill_table_with_data(
+        data_list=data_list,
+        start_row=1,
+        start_col=1,
+        has_header=has_header,
+    )
 
 
 # -------- 선택 영역 기반 v0 (클립보드 이용) --------

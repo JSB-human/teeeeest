@@ -35,7 +35,7 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("HwpInlineAI (HWP + AI Editor)")
-        self.setMinimumSize(960, 540)
+        self.setMinimumSize(960, 1000)
 
         # ---- 좌측 패널: 파일 / 상태 / 액션 ----
         left_frame = QFrame(objectName="LeftPanel")
@@ -228,7 +228,10 @@ class MainWindow(QWidget):
 
     def on_sel_get_clicked(self):
         """현재 한글에서 선택된 영역 텍스트를 가져와 선택 상태 라벨을 갱신."""
-        from tools.engine import get_selection_text_via_clipboard  # type: ignore
+        from tools.engine import (
+            get_selection_text_via_clipboard,
+            get_cursor_position_meta,
+        )  # type: ignore
 
         try:
             sel_text = get_selection_text_via_clipboard()
@@ -236,9 +239,19 @@ class MainWindow(QWidget):
                 self.last_selection_text = sel_text
                 length = len(sel_text)
 
-                # TODO: get_cursor_position_meta가 안정화되면 위치 정보도 같이 표시
-                # 지금은 글자 수만 표시
-                self.selection_label.setText(f"선택: {length}글자")
+                # 커서 위치 메타데이터 가져오기 (문단/오프셋 정보)
+                pos = get_cursor_position_meta()
+                print("DEBUG on_sel_get_clicked pos =", pos)
+
+                if pos:
+                    para_id = pos.get("para_id")
+                    char_pos = pos.get("char_pos")
+                    self.selection_label.setText(
+                        f"선택: 문단 ID {para_id}, 시작 오프셋 {char_pos}, {length}글자"
+                    )
+                else:
+                    self.selection_label.setText(f"선택: {length}글자")
+
                 self.log("[INFO] 선택 영역을 참조로 설정했습니다.")
             else:
                 self.last_selection_text = ""
