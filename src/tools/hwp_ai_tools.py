@@ -18,7 +18,9 @@ import win32gui
 from .hwp_controller import HwpController
 
 # 필요에 따라 보스 환경에 맞게 수정 가능
-AI_SERVER_REWRITE = "http://127.0.0.1:5005/rewrite"  # WSL에서 돌고 있는 rewrite_server.py
+AI_SERVER_REWRITE = (
+    "http://127.0.0.1:5005/rewrite"  # WSL에서 돌고 있는 rewrite_server.py
+)
 
 Mode = Literal["rewrite", "summarize", "extend"]
 
@@ -103,8 +105,12 @@ def _find_active_hwp_hwnd() -> int | None:
     def enum_handler(hwnd, _):
         title = win32gui.GetWindowText(hwnd)
         cls = win32gui.GetClassName(hwnd)
-        if ("Hwp" in cls) or ("한글" in title):
-            print(f"[DEBUG] 후보 HWP 창 발견: HWND={hwnd} CLASS='{cls}' TITLE='{title}'")
+        if (cls is not None and "Hwp" in cls) or (
+            title is not None and "한글" in title
+        ):
+            print(
+                f"[DEBUG] 후보 HWP 창 발견: HWND={hwnd} CLASS='{cls}' TITLE='{title}'"
+            )
             candidates.append(hwnd)
 
     win32gui.EnumWindows(enum_handler, None)

@@ -7,8 +7,9 @@ hwp-mcp는 한글 워드 프로세서(HWP)를 Claude와 같은 AI 모델이 제�
 ## 작동 방식
 
 1. **Claude 호출 과정**:
-   - Claude 데스크톱 애플리케이션에서 hwp-mcp를 호출하면 `D:\hwp-mcp\hwp_mcp_stdio_server.py` 스크립트가 실행됩니다.
+   - Claude 데스크톱 애플리케이션에서 hwp-mcp를 호출하면 프로젝트 폴더의 `hwp_mcp_stdio_server.py` 스크립트가 실행됩니다.
    - 이 스크립트는 표준 입출력(stdio)을 통해 Claude와 통신하는 FastMCP 서버를 생성합니다.
+
    - 서버는 HWP를 조작하기 위한 여러 도구(tool)들을 등록합니다.
 
 2. **기능 실행 과정**:
@@ -64,10 +65,11 @@ hwp-mcp는 한글 워드 프로세서(HWP)를 Claude와 같은 AI 모델이 제�
   "mcpServers": {
     "hwp": {
       "command": "python",
-      "args": ["D:\\hwp-mcp\\hwp_mcp_stdio_server.py"]
+      "args": ["/경로/to/hwp-mcp/hwp_mcp_stdio_server.py"]
     }
   }
 }
+
 ```
 
 위 설정에서 "hwp" 항목을 제거하면 Claude가 더 이상 HWP MCP를 호출하지 않습니다. 

@@ -10,7 +10,8 @@ import win32gui
 import win32con
 import time
 import pythoncom
-from typing import Optional, List, Dict, Any, Tuple
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any, Tuple, Union
 
 logger = logging.getLogger("hwp-controller")
 
@@ -20,12 +21,14 @@ class HwpController:
 
     def __init__(self):
         """한글 애플리케이션 인스턴스를 초기화합니다."""
-        self.hwp = None
+        self.hwp: Any = None
         self.visible = True
         self.is_hwp_running = False
         self.current_document_path = None
 
-    def connect(self, visible: bool = True, register_security_module: bool = True) -> bool:
+    def connect(
+        self, visible: bool = True, register_security_module: bool = True
+    ) -> bool:
         """
         한글 프로그램에 연결합니다.
 
@@ -37,6 +40,9 @@ class HwpController:
             bool: 연결 성공 여부
         """
         try:
+            # COM 초기화
+            pythoncom.CoInitialize()
+
             # GetActiveObject 시도
             try:
                 self.hwp = win32com.client.GetActiveObject("HWPFrame.HwpObject")
@@ -46,23 +52,41 @@ class HwpController:
                 # Dispatch는 새 창을 열 수 있음 - HWP의 한계
                 self.hwp = win32com.client.Dispatch("HWPFrame.HwpObject")
                 logger.info("Dispatch로 HWP에 연결됨 (새 창이 열렸을 수 있음)")
-            
+
             # 보안 모듈 등록 (파일 경로 체크 보안 경고창 방지)
             if register_security_module:
                 try:
-                    # 보안 모듈 DLL 경로 - 실제 파일이 위치한 경로로 수정 필요
-                    module_path = os.path.abspath("D:/hwp-mcp/security_module/FilePathCheckerModuleExample.dll")
-                    self.hwp.RegisterModule("FilePathCheckerModuleExample", module_path)
-                    print("보안 모듈이 등록되었습니다.")
+                    # 보안 모듈 DLL 경로 - 프로젝트 루트 기준 상대 경로로 설정
+                    current_file_dir = os.path.dirname(os.path.abspath(__file__))
+                    project_root = os.path.dirname(os.path.dirname(current_file_dir))
+                    module_path = os.path.join(
+                        project_root,
+                        "security_module",
+                        "FilePathCheckerModuleExample.dll",
+                    )
+
+                    if os.path.exists(module_path):
+                        self.hwp.RegisterModule(
+                            "FilePathCheckerModuleExample", module_path
+                        )
+                        logger.info(f"보안 모듈이 등록되었습니다: {module_path}")
+                    else:
+                        logger.warning(
+                            f"보안 모듈 파일을 찾을 수 없습니다: {module_path}"
+                        )
                 except Exception as e:
-                    print(f"보안 모듈 등록 실패 (무시하고 계속 진행): {e}")
-            
+                    logger.error(f"보안 모듈 등록 실패 (무시하고 계속 진행): {e}")
+
             self.visible = visible
-            self.hwp.XHwpWindows.Item(0).Visible = visible
+            try:
+                self.hwp.XHwpWindows.Item(0).Visible = visible
+            except Exception as e:
+                logger.warning(f"Visible 설정 실패: {e}")
+
             self.is_hwp_running = True
             return True
         except Exception as e:
-            print(f"한글 프로그램 연결 실패: {e}")
+            logger.error(f"한글 프로그램 연결 실패: {e}")
             return False
 
     def disconnect(self) -> bool:
@@ -80,7 +104,7 @@ class HwpController:
 
             return True
         except Exception as e:
-            print(f"한글 프로그램 종료 실패: {e}")
+            logger.error(f"한글 프로그램 종료 실패: {e}")
             return False
 
     def set_message_box_mode(self, mode: int = 0x00020000) -> bool:
@@ -98,12 +122,12 @@ class HwpController:
             bool: 설정 성공 여부
         """
         try:
-            if not self.is_hwp_running:
+            if not self.is_hwp_running or self.hwp is None:
                 return False
             self.hwp.SetMessageBoxMode(mode)
             return True
         except Exception as e:
-            print(f"메시지 박스 모드 설정 실패: {e}")
+            logger.error(f"메시지 박스 모드 설정 실패: {e}")
             return False
 
     def close_document(self, save: bool = False, suppress_dialog: bool = True) -> bool:
@@ -142,15 +166,17 @@ class HwpController:
 
             return bool(result)
         except Exception as e:
-            print(f"문서 닫기 실패: {e}")
+            logger.error(f"문서 닫기 실패: {e}")
             # 메시지 박스 모드 복원 시도
             try:
                 self.hwp.SetMessageBoxMode(0x00000000)
-            except Exception as e:
-                logger.debug(f"SetMessageBoxMode 복원 실패 (무시): {e}")
+            except Exception as e_restore:
+                logger.debug(f"SetMessageBoxMode 복원 실패 (무시): {e_restore}")
             return False
 
-    def close_all_documents(self, save: bool = False, suppress_dialog: bool = True) -> bool:
+    def close_all_documents(
+        self, save: bool = False, suppress_dialog: bool = True
+    ) -> bool:
         """
         모든 문서를 닫습니다.
 
@@ -184,29 +210,29 @@ class HwpController:
 
             return bool(result)
         except Exception as e:
-            print(f"모든 문서 닫기 실패: {e}")
+            logger.error(f"모든 문서 닫기 실패: {e}")
             try:
                 self.hwp.SetMessageBoxMode(0x00000000)
-            except Exception as e:
-                logger.debug(f"SetMessageBoxMode 복원 실패 (무시): {e}")
+            except Exception as e_restore:
+                logger.debug(f"SetMessageBoxMode 복원 실패 (무시): {e_restore}")
             return False
 
     def create_new_document(self) -> bool:
         """
         새 문서를 생성합니다.
-        
+
         Returns:
             bool: 생성 성공 여부
         """
         try:
             if not self.is_hwp_running:
                 self.connect()
-            
+
             self.hwp.Run("FileNew")
             self.current_document_path = None
             return True
         except Exception as e:
-            print(f"새 문서 생성 실패: {e}")
+            logger.error(f"새 문서 생성 실패: {e}")
             return False
 
     def get_open_documents(self) -> Tuple[bool, List[Dict[str, Any]]]:
@@ -249,22 +275,20 @@ class HwpController:
                         logger.debug(f"문서 경로 조회 실패: {e}")
                         doc_path = "(새 문서)"
 
-                    is_current = (i == current_idx) if current_idx is not None else (i == 0)
-                    documents.append({
-                        "index": i,
-                        "path": doc_path,
-                        "is_current": is_current
-                    })
+                    is_current = (
+                        (i == current_idx) if current_idx is not None else (i == 0)
+                    )
+                    documents.append(
+                        {"index": i, "path": doc_path, "is_current": is_current}
+                    )
                 except Exception as e:
-                    documents.append({
-                        "index": i,
-                        "path": f"(오류: {e})",
-                        "is_current": False
-                    })
+                    documents.append(
+                        {"index": i, "path": f"(오류: {e})", "is_current": False}
+                    )
 
             return True, documents
         except Exception as e:
-            print(f"문서 목록 조회 실패: {e}")
+            logger.error(f"문서 목록 조회 실패: {e}")
             return False, []
 
     def switch_document(self, index: int) -> Tuple[bool, str]:
@@ -283,7 +307,7 @@ class HwpController:
 
             doc_count = self.hwp.XHwpDocuments.Count
             if index < 0 or index >= doc_count:
-                return False, f"유효하지 않은 인덱스입니다. (0~{doc_count-1})"
+                return False, f"유효하지 않은 인덱스입니다. (0~{doc_count - 1})"
 
             doc = self.hwp.XHwpDocuments.Item(index)
 
@@ -328,14 +352,14 @@ class HwpController:
             def enum_hwp_windows(hwnd, results):
                 try:
                     class_name = win32gui.GetClassName(hwnd)
-                    if class_name == "HwpFrame" or "Hwp" in class_name:
+                    if class_name == "HwpFrame" or (
+                        class_name is not None and "Hwp" in class_name
+                    ):
                         title = win32gui.GetWindowText(hwnd)
                         if title:  # 제목이 있는 창만
-                            results.append({
-                                "hwnd": hwnd,
-                                "title": title,
-                                "class": class_name
-                            })
+                            results.append(
+                                {"hwnd": hwnd, "title": title, "class": class_name}
+                            )
                 except Exception as e:
                     logger.debug(f"창 정보 조회 실패 hwnd={hwnd}: {e}")
                 return True
@@ -344,16 +368,20 @@ class HwpController:
             win32gui.EnumWindows(enum_hwp_windows, hwp_windows)
 
             for i, win in enumerate(hwp_windows):
-                instances.append({
-                    "index": i,
-                    "hwnd": win["hwnd"],
-                    "title": win["title"],
-                    "is_current": win["hwnd"] == current_hwnd if current_hwnd else False
-                })
+                instances.append(
+                    {
+                        "index": i,
+                        "hwnd": win["hwnd"],
+                        "title": win["title"],
+                        "is_current": win["hwnd"] == current_hwnd
+                        if current_hwnd
+                        else False,
+                    }
+                )
 
             return True, instances
         except Exception as e:
-            print(f"HWP 인스턴스 목록 조회 실패: {e}")
+            logger.error(f"HWP 인스턴스 목록 조회 실패: {e}")
             return False, []
 
     def connect_to_hwp_instance(self, hwnd: int) -> Tuple[bool, str]:
@@ -405,7 +433,10 @@ class HwpController:
                 # Dispatch 후 현재 문서 경로로 확인
                 try:
                     current_path = self.hwp.Path
-                    return True, f"HWP에 연결됨: {title} (문서: {current_path or '새 문서'})"
+                    return (
+                        True,
+                        f"HWP에 연결됨: {title} (문서: {current_path or '새 문서'})",
+                    )
                 except Exception as e:
                     logger.debug(f"Path 가져오기 실패: {e}")
                     return True, f"HWP에 연결됨: {title}"
@@ -449,8 +480,8 @@ class HwpController:
                 self.connect()
 
             abs_path = os.path.abspath(file_path)
-            print(f"[DEBUG] Opening document: {abs_path}")
-            print(f"[DEBUG] File exists: {os.path.exists(abs_path)}")
+            logger.debug(f"Opening document: {abs_path}")
+            logger.debug(f"File exists: {os.path.exists(abs_path)}")
 
             # Use HAction with FileOpen for reliable file opening
             pset = self.hwp.HParameterSet.HFileOpenSave
@@ -458,30 +489,31 @@ class HwpController:
             pset.filename = abs_path
             pset.Format = "HWP"
             result = self.hwp.HAction.Execute("FileOpen", pset.HSet)
-            print(f"[DEBUG] FileOpen result: {result}")
+            logger.debug(f"FileOpen result: {result}")
             if result:
                 self.current_document_path = abs_path
             return result
         except Exception as e:
-            print(f"문서 열기 실패: {e}")
+            logger.error(f"문서 열기 실패: {e}")
             import traceback
-            traceback.print_exc()
+
+            logger.error(traceback.format_exc())
             return False
 
     def save_document(self, file_path: Optional[str] = None) -> bool:
         """
         문서를 저장합니다.
-        
+
         Args:
             file_path (str, optional): 저장할 경로. None이면 현재 경로에 저장.
-            
+
         Returns:
             bool: 저장 성공 여부
         """
         try:
             if not self.is_hwp_running:
                 return False
-            
+
             if file_path:
                 abs_path = os.path.abspath(file_path)
                 # 파일 형식과 경로 모두 지정하여 저장
@@ -494,30 +526,30 @@ class HwpController:
                     # 저장 대화 상자 표시 (파라미터 없이 호출)
                     self.hwp.SaveAs()
                     # 대화 상자에서 사용자가 선택한 경로를 알 수 없으므로 None 유지
-            
+
             return True
         except Exception as e:
-            print(f"문서 저장 실패: {e}")
+            logger.error(f"문서 저장 실패: {e}")
             return False
 
     def insert_text(self, text: str, preserve_linebreaks: bool = True) -> bool:
         """
         현재 커서 위치에 텍스트를 삽입합니다.
-        
+
         Args:
             text (str): 삽입할 텍스트
             preserve_linebreaks (bool): 줄바꿈 유지 여부
-            
+
         Returns:
             bool: 삽입 성공 여부
         """
         try:
             if not self.is_hwp_running:
                 return False
-            
-            if preserve_linebreaks and '\n' in text:
+
+            if preserve_linebreaks and "\n" in text:
                 # 줄바꿈이 포함된 경우 줄 단위로 처리
-                lines = text.split('\n')
+                lines = text.split("\n")
                 for i, line in enumerate(lines):
                     if i > 0:  # 첫 줄이 아니면 줄바꿈 추가
                         self.insert_paragraph()
@@ -528,14 +560,14 @@ class HwpController:
                 # 줄바꿈이 없거나 유지하지 않는 경우 한 번에 처리
                 return self._insert_text_direct(text)
         except Exception as e:
-            print(f"텍스트 삽입 실패: {e}")
+            logger.error(f"텍스트 삽입 실패: {e}")
             return False
 
     def _set_table_cursor(self) -> bool:
         """
         표 안에서 커서 위치를 제어하는 내부 메서드입니다.
         현재 셀을 선택하고 취소하여 커서를 셀 안에 위치시킵니다.
-        
+
         Returns:
             bool: 성공 여부
         """
@@ -555,42 +587,52 @@ class HwpController:
     def _insert_text_direct(self, text: str) -> bool:
         """
         텍스트를 직접 삽입하는 내부 메서드입니다.
-        
+
         Args:
             text (str): 삽입할 텍스트
-            
+
         Returns:
             bool: 삽입 성공 여부
         """
         try:
             # 텍스트 삽입을 위한 액션 초기화
-            self.hwp.HAction.GetDefault("InsertText", self.hwp.HParameterSet.HInsertText.HSet)
+            self.hwp.HAction.GetDefault(
+                "InsertText", self.hwp.HParameterSet.HInsertText.HSet
+            )
             self.hwp.HParameterSet.HInsertText.Text = text
-            self.hwp.HAction.Execute("InsertText", self.hwp.HParameterSet.HInsertText.HSet)
+            self.hwp.HAction.Execute(
+                "InsertText", self.hwp.HParameterSet.HInsertText.HSet
+            )
             return True
         except Exception as e:
-            print(f"텍스트 직접 삽입 실패: {e}")
+            logger.error(f"텍스트 직접 삽입 실패: {e}")
             return False
 
-    def set_font(self, font_name: str, font_size: int, bold: bool = False, italic: bool = False, 
-                select_previous_text: bool = False) -> bool:
+    def set_font(
+        self,
+        font_name: Optional[str],
+        font_size: Optional[int],
+        bold: bool = False,
+        italic: bool = False,
+        select_previous_text: bool = False,
+    ) -> bool:
         """
         글꼴 속성을 설정합니다. 현재 위치에서 다음에 입력할 텍스트에 적용됩니다.
-        
+
         Args:
             font_name (str): 글꼴 이름
             font_size (int): 글꼴 크기
             bold (bool): 굵게 여부
             italic (bool): 기울임꼴 여부
             select_previous_text (bool): 이전에 입력한 텍스트를 선택할지 여부
-            
+
         Returns:
             bool: 설정 성공 여부
         """
         try:
             if not self.is_hwp_running:
                 return False
-            
+
             # 새로운 구현: set_font_style 메서드 사용
             return self.set_font_style(
                 font_name=font_name,
@@ -598,67 +640,100 @@ class HwpController:
                 bold=bold,
                 italic=italic,
                 underline=False,
-                select_previous_text=select_previous_text
+                select_previous_text=select_previous_text,
             )
         except Exception as e:
-            print(f"글꼴 설정 실패: {e}")
+            logger.error(f"글꼴 설정 실패: {e}")
             return False
 
-    def set_font_style(self, font_name: str = None, font_size: int = None, 
-                     bold: bool = False, italic: bool = False, underline: bool = False,
-                     select_previous_text: bool = False) -> bool:
+    def set_font_style(
+        self,
+        font_name: Optional[str] = None,
+        font_size: Optional[int] = None,
+        bold: bool = False,
+        italic: bool = False,
+        underline: bool = False,
+        strike: bool = False,
+        color: int = 0,
+        select_previous_text: bool = False,
+    ) -> bool:
         """
         현재 선택된 텍스트의 글꼴 스타일을 설정합니다.
-        선택된 텍스트가 없으면, 다음 입력될 텍스트에 적용됩니다.
-        
+
         Args:
-            font_name (str, optional): 글꼴 이름. None이면 현재 글꼴 유지.
-            font_size (int, optional): 글꼴 크기. None이면 현재 크기 유지.
-            bold (bool): 굵게 여부
-            italic (bool): 기울임꼴 여부
-            underline (bool): 밑줄 여부
-            select_previous_text (bool): 이전에 입력한 텍스트를 선택할지 여부
-            
-        Returns:
-            bool: 설정 성공 여부
+            color: 글자 색상 (0xBBGGRR 형식, 예: 빨강 0x0000FF, 초록 0x00FF00)
+            strike: 취소선 여부
         """
         try:
             if not self.is_hwp_running:
                 return False
-            
-            # 이전 텍스트 선택 옵션이 활성화된 경우 현재 단락의 이전 텍스트 선택
+
             if select_previous_text:
                 self.select_last_text()
-            
-            # 글꼴 설정을 위한 액션 초기화
-            self.hwp.HAction.GetDefault("CharShape", self.hwp.HParameterSet.HCharShape.HSet)
-            
-            # 글꼴 이름 설정
+
+            self.hwp.HAction.GetDefault(
+                "CharShape", self.hwp.HParameterSet.HCharShape.HSet
+            )
+
             if font_name:
                 self.hwp.HParameterSet.HCharShape.FaceNameHangul = font_name
                 self.hwp.HParameterSet.HCharShape.FaceNameLatin = font_name
-                self.hwp.HParameterSet.HCharShape.FaceNameHanja = font_name
-                self.hwp.HParameterSet.HCharShape.FaceNameJapanese = font_name
-                self.hwp.HParameterSet.HCharShape.FaceNameOther = font_name
-                self.hwp.HParameterSet.HCharShape.FaceNameSymbol = font_name
-                self.hwp.HParameterSet.HCharShape.FaceNameUser = font_name
-            
-            # 글꼴 크기 설정 (hwpunit, 10pt = 1000)
+
             if font_size:
                 self.hwp.HParameterSet.HCharShape.Height = font_size * 100
-            
-            # 스타일 설정
+
             self.hwp.HParameterSet.HCharShape.Bold = bold
             self.hwp.HParameterSet.HCharShape.Italic = italic
             self.hwp.HParameterSet.HCharShape.UnderlineType = 1 if underline else 0
-            
-            # 변경사항 적용
-            self.hwp.HAction.Execute("CharShape", self.hwp.HParameterSet.HCharShape.HSet)
-            
+            self.hwp.HParameterSet.HCharShape.StrikeOutType = 1 if strike else 0
+            self.hwp.HParameterSet.HCharShape.TextColor = color
+
+            self.hwp.HAction.Execute(
+                "CharShape", self.hwp.HParameterSet.HCharShape.HSet
+            )
             return True
-            
         except Exception as e:
-            print(f"글꼴 스타일 설정 실패: {e}")
+            logger.error(f"글꼴 스타일 설정 실패: {e}")
+            return False
+
+    def clear_cell_content(self) -> bool:
+        """현재 셀의 내용을 완전히 삭제합니다."""
+        try:
+            self.hwp.Run("TableSelCell")
+            self.hwp.HAction.Run("SelectAll")
+            try:
+                self.hwp.HAction.Run("EditCut")
+            except Exception:
+                self.hwp.Run("Delete")
+            self.hwp.Run("Cancel")
+            self._set_table_cursor()
+            return True
+        except Exception as e:
+            logger.error(f"셀 내용 삭제 실패: {e}")
+            return False
+
+    def insert_diff_text(self, old_text: str, new_text: str) -> bool:
+        """한 셀 안에 이전 텍스트(빨간 취소선)와 새 텍스트(초록 굵게)를 함께 삽입합니다."""
+        try:
+            if not old_text or old_text == "(빈 셀)":
+                old_text = ""
+
+            # 1. 이전 텍스트 (빨강 + 취소선)
+            if old_text:
+                self.set_font_style(color=0x0000FF, strike=True, bold=False)
+                self._insert_text_direct(old_text)
+                self.set_font_style(color=0, strike=False, bold=False)
+                self._insert_text_direct(" → ")
+
+            # 2. 새 텍스트 (초록 + 굵게)
+            self.set_font_style(color=0x00FF00, strike=False, bold=True)
+            self._insert_text_direct(new_text)
+
+            # 3. 스타일 복구
+            self.set_font_style(color=0, strike=False, bold=False)
+            return True
+        except Exception as e:
+            logger.error(f"Diff 텍스트 삽입 실패: {e}")
             return False
 
     def _get_current_position(self):
@@ -670,13 +745,23 @@ class HwpController:
         """
         try:
             if not self.is_hwp_running or not self.hwp:
+                logger.debug("HWP가 실행 중이 아니거나 객체가 없습니다. (GetPos 호출 불가)")
                 return None
+            
+            # COM 객체 유효성 체크를 위해 간단한 속성 조회
+            try:
+                _ = self.hwp.Path
+            except Exception:
+                logger.warning("HWP COM 객체 연결이 끊긴 것 같습니다. 재연결을 시도하세요.")
+                return None
+
             pos = self.hwp.GetPos()
             # 디버깅용: 실제 반환값 확인
-            print("DEBUG RAW GetPos:", pos)
+            logger.debug(f"RAW GetPos: {pos}")
             return pos
+
         except Exception as e:
-            logger.debug(f"GetPos 실패: {e}")
+            logger.error(f"GetPos() 호출 중 치명적 오류: {e}")
             return None
 
     def _set_position(self, pos):
@@ -704,7 +789,9 @@ class HwpController:
             # 4개(위치 유형 포함)일 수도 있으므로, 항상 마지막 3개를 사용
             list_id, para_id, char_pos = pos[-3:]
 
-            print("DEBUG get_cursor_pos RAW POS:", pos, "=>", list_id, para_id, char_pos)
+            logger.debug(
+                f"get_cursor_pos RAW POS: {pos} => {list_id}, {para_id}, {char_pos}"
+            )
 
             return {
                 "list_id": list_id,
@@ -718,69 +805,81 @@ class HwpController:
     def insert_table(self, rows: int, cols: int) -> bool:
         """
         현재 커서 위치에 표를 삽입합니다.
-        
+
         Args:
             rows (int): 행 수
             cols (int): 열 수
-            
+
         Returns:
             bool: 삽입 성공 여부
         """
         try:
             if not self.is_hwp_running:
                 return False
-            
-            self.hwp.HAction.GetDefault("TableCreate", self.hwp.HParameterSet.HTableCreation.HSet)
+
+            self.hwp.HAction.GetDefault(
+                "TableCreate", self.hwp.HParameterSet.HTableCreation.HSet
+            )
             self.hwp.HParameterSet.HTableCreation.Rows = rows
             self.hwp.HParameterSet.HTableCreation.Cols = cols
-            self.hwp.HParameterSet.HTableCreation.WidthType = 0  # 0: 단에 맞춤, 1: 절대값
+            self.hwp.HParameterSet.HTableCreation.WidthType = (
+                0  # 0: 단에 맞춤, 1: 절대값
+            )
             self.hwp.HParameterSet.HTableCreation.HeightType = 1  # 0: 자동, 1: 절대값
-            self.hwp.HParameterSet.HTableCreation.WidthValue = 0  # 단에 맞춤이므로 무시됨
+            self.hwp.HParameterSet.HTableCreation.WidthValue = (
+                0  # 단에 맞춤이므로 무시됨
+            )
             self.hwp.HParameterSet.HTableCreation.HeightValue = 1000  # 셀 높이(hwpunit)
-            
+
             # 각 열의 너비를 설정 (모두 동일하게)
             # PageWidth 대신 고정 값 사용
             col_width = 8000 // cols  # 전체 너비를 열 수로 나눔
             self.hwp.HParameterSet.HTableCreation.CreateItemArray("ColWidth", cols)
             for i in range(cols):
                 self.hwp.HParameterSet.HTableCreation.ColWidth.SetItem(i, col_width)
-                
-            self.hwp.HAction.Execute("TableCreate", self.hwp.HParameterSet.HTableCreation.HSet)
+
+            self.hwp.HAction.Execute(
+                "TableCreate", self.hwp.HParameterSet.HTableCreation.HSet
+            )
             return True
         except Exception as e:
-            print(f"표 삽입 실패: {e}")
+            logger.error(f"표 삽입 실패: {e}")
             return False
 
     def insert_image(self, image_path: str, width: int = 0, height: int = 0) -> bool:
         """
         현재 커서 위치에 이미지를 삽입합니다.
-        
+
         Args:
             image_path (str): 이미지 파일 경로
             width (int): 이미지 너비(0이면 원본 크기)
             height (int): 이미지 높이(0이면 원본 크기)
-            
+
         Returns:
             bool: 삽입 성공 여부
         """
         try:
             if not self.is_hwp_running:
                 return False
-            
+
             abs_path = os.path.abspath(image_path)
             if not os.path.exists(abs_path):
-                print(f"이미지 파일을 찾을 수 없습니다: {abs_path}")
+                logger.error(f"이미지 파일을 찾을 수 없습니다: {abs_path}")
                 return False
-                
-            self.hwp.HAction.GetDefault("InsertPicture", self.hwp.HParameterSet.HInsertPicture.HSet)
+
+            self.hwp.HAction.GetDefault(
+                "InsertPicture", self.hwp.HParameterSet.HInsertPicture.HSet
+            )
             self.hwp.HParameterSet.HInsertPicture.FileName = abs_path
             self.hwp.HParameterSet.HInsertPicture.Width = width
             self.hwp.HParameterSet.HInsertPicture.Height = height
             self.hwp.HParameterSet.HInsertPicture.Embed = 1  # 0: 링크, 1: 파일 포함
-            self.hwp.HAction.Execute("InsertPicture", self.hwp.HParameterSet.HInsertPicture.HSet)
+            self.hwp.HAction.Execute(
+                "InsertPicture", self.hwp.HParameterSet.HInsertPicture.HSet
+            )
             return True
         except Exception as e:
-            print(f"이미지 삽입 실패: {e}")
+            logger.error(f"이미지 삽입 실패: {e}")
             return False
 
     def undo(self, count: int = 1) -> Tuple[bool, str]:
@@ -872,10 +971,12 @@ class HwpController:
             result = self.hwp.HAction.Execute("RepeatFind", pset.HSet)
             return bool(result)
         except Exception as e:
-            print(f"텍스트 찾기 실패: {e}")
+            logger.error(f"텍스트 찾기 실패: {e}")
             return False
 
-    def replace_text(self, find_text: str, replace_text: str, replace_all: bool = True) -> bool:
+    def replace_text(
+        self, find_text: str, replace_text: str, replace_all: bool = True
+    ) -> bool:
         """
         문서에서 텍스트를 찾아 바꿉니다.
 
@@ -906,7 +1007,7 @@ class HwpController:
             self.hwp.HAction.Execute("AllReplace", pset.HSet)
             return True
         except Exception as e:
-            print(f"텍스트 바꾸기 실패: {e}")
+            logger.error(f"텍스트 바꾸기 실패: {e}")
             return False
 
     def get_text(self) -> str:
@@ -924,17 +1025,17 @@ class HwpController:
 
             # 1차 시도: 표준 API
             try:
-                return self.hwp.GetTextFile("TEXT", "")
+                text = self.hwp.GetTextFile("TEXT", "")
+                if text:
+                    return text
             except Exception as e:
-                print(f"텍스트 가져오기 실패(GetTextFile): {e}")
+                logger.debug(f"텍스트 가져오기 실패(GetTextFile): {e}")
 
             # 2차 시도: 클립보드 기반 fallback (윈도우에 실제 키 입력 보내기)
             try:
                 import win32clipboard
-                import win32gui
                 import win32api
                 import win32con
-                import time
 
                 # 한글 창을 전면으로 가져오기
                 try:
@@ -943,7 +1044,7 @@ class HwpController:
                     win32gui.SetForegroundWindow(hwnd)
                     time.sleep(0.2)
                 except Exception as e_hwnd:
-                    print(f"윈도우 활성화 실패(무시하고 진행): {e_hwnd}")
+                    logger.debug(f"윈도우 활성화 실패(무시하고 진행): {e_hwnd}")
 
                 # Ctrl+A, Ctrl+C 실제 키 이벤트 전송
                 def send_ctrl_combo(vk: int):
@@ -951,170 +1052,192 @@ class HwpController:
                     win32api.keybd_event(vk, 0, 0, 0)
                     time.sleep(0.05)
                     win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
-                    win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+                    win32api.keybd_event(
+                        win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0
+                    )
 
                 # 전체 선택
-                send_ctrl_combo(ord('A'))
+                send_ctrl_combo(ord("A"))
                 time.sleep(0.1)
                 # 복사
-                send_ctrl_combo(ord('C'))
+                send_ctrl_combo(ord("C"))
                 time.sleep(0.1)
 
                 # 클립보드에서 텍스트 읽기
                 win32clipboard.OpenClipboard()
                 try:
-                    text = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+                    text = win32clipboard.GetClipboardData(
+                        win32clipboard.CF_UNICODETEXT
+                    )
                 finally:
                     win32clipboard.CloseClipboard()
 
                 return text or ""
             except Exception as e_fb:
-                print(f"클립보드 기반 텍스트 추출 실패: {e_fb}")
+                logger.error(f"클립보드 기반 텍스트 추출 실패: {e_fb}")
                 return ""
         except Exception as e:
-            print(f"텍스트 가져오기 실패(알 수 없는 오류): {e}")
+            logger.error(f"텍스트 가져오기 실패(알 수 없는 오류): {e}")
             return ""
 
-    def set_page_setup(self, orientation: str = "portrait", margin_left: int = 1000, 
-                     margin_right: int = 1000, margin_top: int = 1000, margin_bottom: int = 1000) -> bool:
+    def set_page_setup(
+        self,
+        orientation: str = "portrait",
+        margin_left: int = 1000,
+        margin_right: int = 1000,
+        margin_top: int = 1000,
+        margin_bottom: int = 1000,
+    ) -> bool:
         """
         페이지 설정을 변경합니다.
-        
+
         Args:
             orientation (str): 용지 방향 ('portrait' 또는 'landscape')
             margin_left (int): 왼쪽 여백(hwpunit)
             margin_right (int): 오른쪽 여백(hwpunit)
             margin_top (int): 위쪽 여백(hwpunit)
             margin_bottom (int): 아래쪽 여백(hwpunit)
-            
+
         Returns:
             bool: 설정 성공 여부
         """
         try:
             if not self.is_hwp_running:
                 return False
-            
+
             # 매크로 명령 사용
             orient_val = 0 if orientation.lower() == "portrait" else 1
-            
+
             # 페이지 설정 매크로
-            result = self.hwp.Run(f"PageSetup3 {orient_val} {margin_left} {margin_right} {margin_top} {margin_bottom}")
+            result = self.hwp.Run(
+                f"PageSetup3 {orient_val} {margin_left} {margin_right} {margin_top} {margin_bottom}"
+            )
             return bool(result)
         except Exception as e:
-            print(f"페이지 설정 실패: {e}")
+            logger.error(f"페이지 설정 실패: {e}")
             return False
 
     def insert_paragraph(self) -> bool:
         """
         새 단락을 삽입합니다.
-        
+
         Returns:
             bool: 삽입 성공 여부
         """
         try:
             if not self.is_hwp_running:
                 return False
-            
+
             self.hwp.HAction.Run("BreakPara")
             return True
         except Exception as e:
-            print(f"단락 삽입 실패: {e}")
+            logger.error(f"단락 삽입 실패: {e}")
             return False
 
     def select_all(self) -> bool:
         """
         문서 전체를 선택합니다.
-        
+
         Returns:
             bool: 선택 성공 여부
         """
         try:
             if not self.is_hwp_running:
                 return False
-            
+
             self.hwp.Run("SelectAll")
             return True
         except Exception as e:
-            print(f"전체 선택 실패: {e}")
+            logger.error(f"전체 선택 실패: {e}")
             return False
 
     def fill_cell_field(self, field_name: str, value: str, n: int = 1) -> bool:
         """
         동일한 이름의 셀필드 중 n번째에만 값을 채웁니다.
         위키독스 예제: https://wikidocs.net/261646
-        
+
         Args:
             field_name (str): 필드 이름
             value (str): 채울 값
             n (int): 몇 번째 필드에 값을 채울지 (1부터 시작)
-            
+
         Returns:
             bool: 성공 여부
         """
         try:
             if not self.is_hwp_running:
                 return False
-                
+
             # 1. 필드 목록 가져오기
             # HGO_GetFieldList은 현재 문서에 있는 모든 필드 목록을 가져옵니다.
-            self.hwp.HAction.GetDefault("HGo_GetFieldList", self.hwp.HParameterSet.HGo.HSet)
-            self.hwp.HAction.Execute("HGo_GetFieldList", self.hwp.HParameterSet.HGo.HSet)
-            
+            self.hwp.HAction.GetDefault(
+                "HGo_GetFieldList", self.hwp.HParameterSet.HGo.HSet
+            )
+            self.hwp.HAction.Execute(
+                "HGo_GetFieldList", self.hwp.HParameterSet.HGo.HSet
+            )
+
             # 2. 필드 이름이 동일한 모든 셀필드 찾기
             field_list = []
             field_count = self.hwp.HParameterSet.HGo.FieldList.Count
-            
+
             for i in range(field_count):
                 field_info = self.hwp.HParameterSet.HGo.FieldList.Item(i)
                 if field_info.FieldName == field_name:
                     field_list.append((field_info.FieldName, i))
-            
+
             # 3. n번째 필드가 존재하는지 확인 (인덱스는 0부터 시작하므로 n-1)
             if len(field_list) < n:
-                print(f"해당 이름의 필드가 충분히 없습니다. 필요: {n}, 존재: {len(field_list)}")
+                logger.warning(
+                    f"해당 이름의 필드가 충분히 없습니다. 필요: {n}, 존재: {len(field_list)}"
+                )
                 return False
-                
+
             # 4. n번째 필드의 위치로 이동
-            target_field_idx = field_list[n-1][1]
-            
+            target_field_idx = field_list[n - 1][1]
+
             # HGo_SetFieldText를 사용하여 해당 필드 위치로 이동한 후 텍스트 설정
-            self.hwp.HAction.GetDefault("HGo_SetFieldText", self.hwp.HParameterSet.HGo.HSet)
+            self.hwp.HAction.GetDefault(
+                "HGo_SetFieldText", self.hwp.HParameterSet.HGo.HSet
+            )
             self.hwp.HParameterSet.HGo.HSet.SetItem("FieldIdx", target_field_idx)
             self.hwp.HParameterSet.HGo.HSet.SetItem("Text", value)
-            self.hwp.HAction.Execute("HGo_SetFieldText", self.hwp.HParameterSet.HGo.HSet)
-            
+            self.hwp.HAction.Execute(
+                "HGo_SetFieldText", self.hwp.HParameterSet.HGo.HSet
+            )
+
             return True
         except Exception as e:
-            print(f"셀필드 값 채우기 실패: {e}")
+            logger.error(f"셀필드 값 채우기 실패: {e}")
             return False
-        
+
     def select_last_text(self) -> bool:
         """
         현재 단락의 마지막으로 입력된 텍스트를 선택합니다.
-        
+
         Returns:
             bool: 선택 성공 여부
         """
         try:
             if not self.is_hwp_running:
                 return False
-            
+
             # 현재 위치 저장
             current_pos = self.hwp.GetPos()
             if not current_pos:
                 return False
-                
+
             # 현재 단락의 시작으로 이동
             self.hwp.Run("MoveLineStart")
             start_pos = self.hwp.GetPos()
-            
+
             # 이전 위치로 돌아가서 선택 영역 생성
             self.hwp.SetPos(*start_pos)
             self.hwp.SelectText(start_pos, current_pos)
-            
+
             return True
         except Exception as e:
-            print(f"텍스트 선택 실패: {e}")
+            logger.error(f"텍스트 선택 실패: {e}")
             return False
 
     def fill_cell_next_to_label(
@@ -1123,7 +1246,7 @@ class HwpController:
         value: str,
         direction: str = "right",
         occurrence: int = 1,
-        mode: str = "replace"
+        mode: str = "replace",
     ) -> Tuple[bool, str]:
         """
         표에서 레이블을 찾아 옆 셀에 값을 입력합니다.
@@ -1162,7 +1285,10 @@ class HwpController:
                     if i == 0:
                         return False, f"레이블 '{label}'을(를) 찾을 수 없습니다."
                     else:
-                        return False, f"레이블 '{label}'의 {occurrence}번째 항목을 찾을 수 없습니다. (총 {i}개 발견)"
+                        return (
+                            False,
+                            f"레이블 '{label}'의 {occurrence}번째 항목을 찾을 수 없습니다. (총 {i}개 발견)",
+                        )
                 found = True
 
             if not found:
@@ -1183,7 +1309,10 @@ class HwpController:
             elif direction_lower == "up":
                 self.hwp.HAction.Run("TableUpperCell")
             else:
-                return False, f"잘못된 방향입니다: {direction}. 'right', 'left', 'down', 'up' 중 하나를 사용하세요."
+                return (
+                    False,
+                    f"잘못된 방향입니다: {direction}. 'right', 'left', 'down', 'up' 중 하나를 사용하세요.",
+                )
 
             # 5. mode에 따라 값 입력
             mode_lower = mode.lower()
@@ -1204,18 +1333,72 @@ class HwpController:
                 self.hwp.HAction.Run("MoveLineEnd")
                 self._insert_text_direct(value)
             else:
-                return False, f"잘못된 mode입니다: {mode}. 'replace', 'prepend', 'append' 중 하나를 사용하세요."
+                return (
+                    False,
+                    f"잘못된 mode입니다: {mode}. 'replace', 'prepend', 'append' 중 하나를 사용하세요.",
+                )
 
             return True, f"'{label}' 옆 셀에 '{value}' 입력 완료"
 
         except Exception as e:
-            print(f"셀 채우기 실패: {e}")
+            logger.error(f"셀 채우기 실패: {e}")
             return False, f"셀 채우기 실패: {str(e)}"
 
+    def fill_table_cell(self, row: int, col: int, text: str) -> bool:
+        """현재 커서가 위치한 표에서 지정한 셀(row, col)에 텍스트를 채운다.
+
+        Args:
+            row: 행 번호 (1부터 시작)
+            col: 열 번호 (1부터 시작)
+            text: 입력할 텍스트
+
+        Returns:
+            bool: 성공 여부
+        """
+        try:
+            if not self.is_hwp_running:
+                return False
+
+            # 현재 위치 저장
+            original_pos = self.hwp.GetPos()
+
+            # 1. 표의 1행 1열로 확실히 이동
+            if not self._move_to_top_left_cell():
+                return False
+
+            # 2. 지정된 행/열로 이동
+            for _ in range(max(0, row - 1)):
+                self.hwp.Run("TableLowerCell")
+            for _ in range(max(0, col - 1)):
+                self.hwp.Run("TableRightCell")
+
+            # 셀 내용 삭제 후 텍스트 입력
+            # 셀 전체 선택 → 내용 잘라내기(EditCut)로 완전히 비운 뒤 새 텍스트 입력
+            self.hwp.Run("TableSelCell")
+            self.hwp.HAction.Run("SelectAll")
+            try:
+                self.hwp.HAction.Run("EditCut")
+            except Exception:
+                # EditCut이 실패하면 Delete로 폴백
+                self.hwp.Run("Delete")
+            self._set_table_cursor()
+            self._insert_text_direct(text)
+            self.hwp.Run("Cancel")
+
+            # 위치 복원 (실패해도 무시)
+            try:
+                if original_pos:
+                    self.hwp.SetPos(*original_pos)
+            except Exception:
+                pass
+
+            return True
+        except Exception as e:
+            logger.error(f"단일 셀 채우기 실패: {e}")
+            return False
+
     def fill_cells_from_dict(
-        self,
-        label_value_map: Dict[str, str],
-        direction: str = "right"
+        self, label_value_map: Dict[str, str], direction: str = "right"
     ) -> Dict[str, Tuple[bool, str]]:
         """
         여러 레이블에 대해 옆 셀에 값을 입력합니다.
@@ -1235,78 +1418,359 @@ class HwpController:
 
         return results
 
-    def fill_table_with_data(self, data: List[List[str]], start_row: int = 1, start_col: int = 1, has_header: bool = False) -> bool:
+    def is_cursor_in_table(self) -> bool:
+        """현재 커서가 표 안에 있는지 대략 판별한다.
+
+        아이디어:
+        - 표 안에서는 `TableSelCell` 액션이 정상적으로 동작해서 셀 선택이 된다.
+        - 표 밖에서는 아무 변화가 없거나 예외가 날 수 있다.
+        - 이 함수를 "가벼운 프로빙" 용도로만 쓰고, 실패해도 치명적이지 않게 처리한다.
         """
-        현재 커서 위치의 표에 데이터를 채웁니다.
-        
+        try:
+            if not self.is_hwp_running or not self.hwp:
+                return False
+
+            # 현재 위치 백업
+            original_pos = self.hwp.GetPos()
+
+            # 셀 선택 시도
+            result = self.hwp.HAction.Run("TableSelCell")
+
+            # 선택 해제
+            self.hwp.HAction.Run("Cancel")
+
+            # 위치 복원
+            if original_pos:
+                try:
+                    self.hwp.SetPos(*original_pos)
+                except Exception as e_setpos:
+                    logger.debug(
+                        f"is_cursor_in_table: 위치 복원 실패(무시): {e_setpos}"
+                    )
+
+            # HAction.Run 반환값이 환경에 따라 다를 수 있으므로,
+            # 일단 예외 없이 실행되었다면 True 쪽으로 간주하고,
+            # 필요하면 나중에 더 정교하게 튜닝한다.
+            return bool(result)
+        except Exception as e:
+            logger.debug(f"is_cursor_in_table 체크 중 오류: {e}")
+            return False
+
+    def _move_to_top_left_cell(self) -> bool:
+        """현재 커서가 있는 표의 가장 첫 번째 셀(1행 1열)로 이동합니다.
+        드래그(셀 블록) 상태에서도 안전하게 작동합니다.
+        """
+        try:
+            # 1. 셀 선택 모드 진입 (이미 드래그 중이면 해당 영역 유지, 아니면 현재 셀 선택)
+            self.hwp.Run("TableSelCell")
+            # 2. 현재 열의 맨 위행으로 이동
+            self.hwp.Run("TableRowBegin")
+            # 3. 현재 행의 맨 앞열로 이동
+            self.hwp.Run("TableColBegin")
+            # 4. 선택 모드 해제 (커서는 이제 1행 1열에 위치)
+            self.hwp.Run("Cancel")
+            return True
+        except Exception as e:
+            logger.error(f"표 첫 번째 셀로 이동 실패: {e}")
+            return False
+
+    def get_current_table_as_text(self) -> str:
+        """현재 커서가 있는 표의 전체 내용을 탭과 개행으로 구분된 텍스트로 가져온다.
+        AI 서버의 plan_table 입력용으로 사용됩니다.
+        """
+        try:
+            if not self.is_hwp_running:
+                return ""
+
+            # 표 전체 선택
+            self.hwp.Run("TableSelCell")
+            self.hwp.Run("TableSelTable")
+
+            # 클립보드로 복사
+            self.hwp.HAction.Run("Copy")
+            self.hwp.Run("Cancel")
+
+            import win32clipboard
+
+            win32clipboard.OpenClipboard()
+            try:
+                text = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+            finally:
+                win32clipboard.CloseClipboard()
+
+            return text or ""
+        except Exception as e:
+            logger.error(f"표 텍스트 추출 실패: {e}")
+            return ""
+
+    def get_table_cell_text(self, row: int, col: int) -> str:
+        """현재 표의 특정 셀(row, col)의 텍스트를 가져온다.
+
+        Args:
+            row: 행 번호 (1부터 시작)
+            col: 열 번호 (1부터 시작)
+
+        Returns:
+            str: 셀 텍스트 내용
+        """
+        try:
+            if not self.is_hwp_running:
+                return ""
+
+            # 1. 표의 1행 1열로 확실히 이동
+            if not self._move_to_top_left_cell():
+                return ""
+
+            # 2. 지정된 행/열로 이동
+            for _ in range(max(0, row - 1)):
+                self.hwp.Run("TableLowerCell")
+            for _ in range(max(0, col - 1)):
+                self.hwp.Run("TableRightCell")
+
+            # 셀 선택 후 텍스트 가져오기
+            self.hwp.HAction.Run("TableSelCell")
+            text = self._get_cell_text_by_clipboard()
+            self.hwp.HAction.Run("Cancel")
+
+            return text
+        except Exception as e:
+            logger.error(f"표 셀 텍스트 가져오기 실패: {e}")
+            return ""
+
+    def merge_table_cells(
+        self, start_row: int, start_col: int, end_row: int, end_col: int
+    ) -> bool:
+        """현재 표의 지정된 범위의 셀들을 병합한다.
+
+        Args:
+            start_row: 시작 행 (1부터 시작)
+            start_col: 시작 열 (1부터 시작)
+            end_row: 종료 행 (1부터 시작)
+            end_col: 종료 열 (1부터 시작)
+
+        Returns:
+            bool: 성공 여부
+        """
+        try:
+            if not self.is_hwp_running:
+                return False
+
+            # 1. 표의 1행 1열로 확실히 이동
+            if not self._move_to_top_left_cell():
+                return False
+
+            # 2. 시작 셀로 이동
+            for _ in range(max(0, start_row - 1)):
+                self.hwp.Run("TableLowerCell")
+            for _ in range(max(0, start_col - 1)):
+                self.hwp.Run("TableRightCell")
+
+            # 선택 시작 (F5 한 번: 셀 선택, F5 두 번: 다중 셀 선택 시작)
+            self.hwp.Run("TableCellBlock")  # F5
+            self.hwp.Run("TableCellBlock")  # F5 again for multi-selection
+
+            # 종료 셀까지 확장
+            row_diff = end_row - start_row
+            col_diff = end_col - start_col
+
+            for _ in range(max(0, row_diff)):
+                self.hwp.Run("TableLowerCell")
+            for _ in range(max(0, col_diff)):
+                self.hwp.Run("TableRightCell")
+
+            # 병합 실행
+            result = self.hwp.Run("TableMergeCell")
+            self.hwp.Run("Cancel")
+
+            return bool(result)
+        except Exception as e:
+            logger.error(f"표 셀 병합 실패: {e}")
+            return False
+
+    def fill_table_with_data(
+        self,
+        data: List[List[str]],
+        start_row: int = 1,
+        start_col: int = 1,
+        has_header: bool = False,
+    ) -> bool:
+        """현재 커서 위치의 표에 데이터를 채운다.
+
         Args:
             data (List[List[str]]): 채울 데이터 2차원 리스트 (행 x 열)
             start_row (int): 시작 행 번호 (1부터 시작)
             start_col (int): 시작 열 번호 (1부터 시작)
             has_header (bool): 첫 번째 행을 헤더로 처리할지 여부
-            
+
         Returns:
             bool: 작업 성공 여부
         """
         try:
             if not self.is_hwp_running:
                 return False
-                
-            # 현재 위치 저장 (나중에 복원을 위해)
-            original_pos = self.hwp.GetPos()
-            
-            # 1. 표 첫 번째 셀로 이동
-            self.hwp.Run("TableSelCell")  # 현재 셀 선택
-            self.hwp.Run("TableSelTable") # 표 전체 선택
-            self.hwp.Run("Cancel")        # 선택 취소 (커서는 표의 시작 부분에 위치)
-            self.hwp.Run("TableSelCell")  # 첫 번째 셀 선택
-            self.hwp.Run("Cancel")        # 선택 취소
-            
-            # 시작 위치로 이동
+
+            # 현재 위치 저장 (실패해도 진행)
+            original_pos = None
+            try:
+                original_pos = self.hwp.GetPos()
+            except Exception as e_pos:
+                logger.debug(f"fill_table_with_data: 현재 위치 백업 실패(무시): {e_pos}")
+
+            # 1. 표의 1행 1열로 확실히 이동
+            if not self._move_to_top_left_cell():
+                return False
+
+            # 2. 시작 위치(start_row, start_col)로 이동
             for _ in range(start_row - 1):
                 self.hwp.Run("TableLowerCell")
-                
+
             for _ in range(start_col - 1):
                 self.hwp.Run("TableRightCell")
-            
+
             # 데이터 채우기
             for row_idx, row_data in enumerate(data):
                 for col_idx, cell_value in enumerate(row_data):
                     # 셀 선택 및 내용 삭제
-                    self.hwp.Run("TableSelCell")
-                    self.hwp.Run("Delete")
-                    
+                    self.clear_cell_content()
+                    self._set_table_cursor()
+
                     # 셀에 값 입력
                     if has_header and row_idx == 0:
                         self.set_font_style(bold=True)
-                        self.hwp.HAction.GetDefault("InsertText", self.hwp.HParameterSet.HInsertText.HSet)
+                        self.hwp.HAction.GetDefault(
+                            "InsertText", self.hwp.HParameterSet.HInsertText.HSet
+                        )
                         self.hwp.HParameterSet.HInsertText.Text = cell_value
-                        self.hwp.HAction.Execute("InsertText", self.hwp.HParameterSet.HInsertText.HSet)
+                        self.hwp.HAction.Execute(
+                            "InsertText", self.hwp.HParameterSet.HInsertText.HSet
+                        )
                         self.set_font_style(bold=False)
                     else:
-                        self.hwp.HAction.GetDefault("InsertText", self.hwp.HParameterSet.HInsertText.HSet)
+                        self.hwp.HAction.GetDefault(
+                            "InsertText", self.hwp.HParameterSet.HInsertText.HSet
+                        )
                         self.hwp.HParameterSet.HInsertText.Text = cell_value
-                        self.hwp.HAction.Execute("InsertText", self.hwp.HParameterSet.HInsertText.HSet)
-                    
-                    # 다음 셀로 이동 (마지막 셀이 아닌 경우)
+                        self.hwp.HAction.Execute(
+                            "InsertText", self.hwp.HParameterSet.HInsertText.HSet
+                        )
+
+                    # 다음 셀로 이동 (마지막 셀은 이동하지 않음)
                     if col_idx < len(row_data) - 1:
                         self.hwp.Run("TableRightCell")
-                
+
                 # 다음 행으로 이동 (마지막 행이 아닌 경우)
                 if row_idx < len(data) - 1:
                     for _ in range(len(row_data) - 1):
                         self.hwp.Run("TableLeftCell")
                     self.hwp.Run("TableLowerCell")
-            
+
             # 표 밖으로 커서 이동
             self.hwp.Run("TableSelCell")  # 현재 셀 선택
-            self.hwp.Run("Cancel")        # 선택 취소
-            self.hwp.Run("MoveDown")      # 아래로 이동
-            
+            self.hwp.Run("Cancel")  # 선택 취소
+            self.hwp.Run("MoveDown")  # 아래로 이동
+
+            # 위치를 완전히 되돌릴 필요는 없지만, 필요하면 아래 코드 활성화
+            # if original_pos:
+            #     self.hwp.SetPos(*original_pos)
+
             return True
 
         except Exception as e:
-            print(f"표 데이터 채우기 실패: {e}")
+            logger.error(f"표 데이터 채우기 실패: {e}")
+            return False
+
+    def increment_date_column_in_current_table(
+        self, days: int = 1, date_col: int = 1
+    ) -> bool:
+        """현재 커서가 위치한 표에서 특정 열(날짜 열)의 날짜만 +days 만큼 증가시킨다.
+
+        이 메서드는 텍스트 기반 파싱 대신, 실제 표 셀을 순회하면서
+        날짜가 들어있는 셀만 직접 수정한다.
+
+        Args:
+            days (int): 증가시킬 일 수 (기본 1)
+            date_col (int): 날짜가 위치한 열 번호 (1부터 시작)
+
+        Returns:
+            bool: 작업 성공 여부
+        """
+        try:
+            if not self.is_hwp_running:
+                return False
+
+            # 날짜 파싱 포맷 후보
+            date_formats = [
+                "%Y. %m. %d",
+                "%Y.%m.%d",
+                "%Y-%m-%d",
+                "%Y/%m/%d",
+            ]
+
+            def try_parse_date(s: str):
+                s_stripped = str(s).strip()
+                for fmt in date_formats:
+                    try:
+                        return datetime.strptime(s_stripped, fmt)
+                    except ValueError:
+                        continue
+                return None
+
+            # 현재 위치 저장
+            original_pos = self.hwp.GetPos()
+
+            # 1. 표의 1행 1열로 확실히 이동
+            if not self._move_to_top_left_cell():
+                return False
+
+            # 2. 날짜 열로 이동 (1-based)
+            for _ in range(max(0, date_col - 1)):
+                self.hwp.Run("TableRightCell")
+
+            while True:
+                # 현재 셀 텍스트 얻기
+                self.hwp.HAction.Run("TableSelCell")
+                cell_text = self._get_cell_text_by_clipboard()
+                self.hwp.HAction.Run("Cancel")
+
+                dt = try_parse_date(cell_text)
+                if dt is not None:
+                    new_dt = dt + timedelta(days=days)
+                    if "/" in cell_text:
+                        out = new_dt.strftime("%Y/%m/%d")
+                    elif "-" in cell_text:
+                        out = new_dt.strftime("%Y-%m-%d")
+                    else:
+                        out = new_dt.strftime("%Y. %m. %d")
+
+                    # 셀 내용 교체
+                    self.hwp.HAction.Run("TableSelCell")
+                    self.hwp.HAction.Run("Delete")
+                    self._insert_text_direct(out)
+                    self.hwp.HAction.Run("Cancel")
+
+                # 다음 행으로 이동 시도
+                try:
+                    self.hwp.HAction.Run("TableLowerCell")
+                except Exception:
+                    break
+
+                # 표 범위를 벗어나면 예외가 나거나, TableSelCell이 실패할 수 있음
+                try:
+                    self.hwp.HAction.Run("TableSelCell")
+                    self.hwp.HAction.Run("Cancel")
+                except Exception:
+                    break
+
+            # 위치 복원 시도 (실패해도 치명적이지 않으므로 무시)
+            try:
+                if original_pos:
+                    self.hwp.SetPos(*original_pos)
+            except Exception:
+                pass
+
+            return True
+        except Exception as e:
+            logger.error(f"표 날짜 열 증가 실패: {e}")
             return False
 
     def _move_direction(self, direction: str) -> bool:
@@ -1323,7 +1787,7 @@ class HwpController:
             "right": "TableRightCell",
             "left": "TableLeftCell",
             "down": "TableLowerCell",
-            "up": "TableUpperCell"
+            "up": "TableUpperCell",
         }
         action = move_actions.get(direction.lower())
         if action:
@@ -1418,7 +1882,7 @@ class HwpController:
                 ("up", "TableUpperCell"),
                 ("down", "TableLowerCell"),
                 ("left", "TableLeftCell"),
-                ("right", "TableRightCell")
+                ("right", "TableRightCell"),
             ]
 
             for dir_name, action in directions:
@@ -1427,7 +1891,7 @@ class HwpController:
                     "up": "TableLowerCell",
                     "down": "TableUpperCell",
                     "left": "TableRightCell",
-                    "right": "TableLeftCell"
+                    "right": "TableLeftCell",
                 }
 
                 for d in range(1, depth + 1):
@@ -1483,7 +1947,9 @@ class HwpController:
         except Exception as e:
             return False, f"찾기 실패: {str(e)}"
 
-    def _find_labels_recursive(self, path: List[str], depth: int = 0) -> Tuple[bool, int]:
+    def _find_labels_recursive(
+        self, path: List[str], depth: int = 0
+    ) -> Tuple[bool, int]:
         """
         경로의 레이블들을 순차적으로 찾는 재귀 함수.
         방향 키워드(<left>, <right>, <up>, <down>)도 지원합니다.
@@ -1534,7 +2000,7 @@ class HwpController:
         path: List[str],
         value: str,
         direction: str = "right",
-        mode: str = "replace"
+        mode: str = "replace",
     ) -> Tuple[bool, str]:
         """
         경로를 따라 레이블과 방향 키워드를 순차적으로 처리하여 셀에 값을 입력합니다.
@@ -1574,7 +2040,10 @@ class HwpController:
                 else:
                     found_path = " > ".join(path[:found_depth])
                     missing_label = path[found_depth]
-                    return False, f"'{found_path}' 이후에 '{missing_label}'을(를) 찾을 수 없습니다."
+                    return (
+                        False,
+                        f"'{found_path}' 이후에 '{missing_label}'을(를) 찾을 수 없습니다.",
+                    )
 
             # 3. 현재 셀 선택 후 해제 - 커서 위치 확정
             self.hwp.HAction.Run("TableSelCell")
@@ -1612,7 +2081,10 @@ class HwpController:
                 self.hwp.HAction.Run("MoveLineEnd")
                 self._insert_text_direct(value)
             else:
-                return False, f"잘못된 mode입니다: {mode}. 'replace', 'prepend', 'append' 중 하나를 사용하세요."
+                return (
+                    False,
+                    f"잘못된 mode입니다: {mode}. 'replace', 'prepend', 'append' 중 하나를 사용하세요.",
+                )
 
             path_str = " > ".join(path)
             return True, f"'{path_str}' 경로의 셀에 '{value}' 입력 완료"
@@ -1624,7 +2096,7 @@ class HwpController:
         self,
         path_value_map: Dict[str, str],
         direction: str = "right",
-        mode: str = "replace"
+        mode: str = "replace",
     ) -> Dict[str, Tuple[bool, str]]:
         """
         여러 경로에 대해 값을 일괄 입력합니다.

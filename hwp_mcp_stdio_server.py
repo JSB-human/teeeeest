@@ -9,18 +9,21 @@ import logging
 import ssl
 from threading import Thread
 import time
+from typing import Optional, List, Dict, Any, Union
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     filename="hwp_mcp_stdio_server.log",
     filemode="a",
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
 # 추가 스트림 핸들러 설정 (별도로 추가)
 stderr_handler = logging.StreamHandler(sys.stderr)
-stderr_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+stderr_handler.setFormatter(
+    logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+)
 logger = logging.getLogger("hwp-mcp-stdio-server")
 logger.addHandler(stderr_handler)
 
@@ -29,60 +32,80 @@ ssl._create_default_https_context = ssl._create_unverified_context
 
 # Set up paths
 current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
+# Add src to sys.path to allow imports like 'tools.hwp_controller'
+src_dir = os.path.join(current_dir, "src")
+if src_dir not in sys.path:
+    sys.path.append(src_dir)
 
 try:
     # Import FastMCP library
     from mcp.server.fastmcp import FastMCP
+
     logger.info("FastMCP successfully imported")
 except ImportError as e:
     logger.error(f"Failed to import FastMCP: {str(e)}")
-    print(f"Error: Failed to import FastMCP. Please install with 'pip install mcp'", file=sys.stderr)
+    print(
+        f"Error: Failed to import FastMCP. Please install with 'pip install mcp'",
+        file=sys.stderr,
+    )
     sys.exit(1)
+
+# Import HWP components using absolute imports relative to sys.path
+try:
+    from tools.hwp_controller import HwpController
+    from tools.hwp_table_tools import HwpTableTools
+
+    logger.info("HWP components imported successfully")
+except ImportError as e:
+    logger.error(f"Failed to import HWP components: {str(e)}")
+    # Fallback to src.tools
+    try:
+        from src.tools.hwp_controller import HwpController
+        from src.tools.hwp_table_tools import HwpTableTools
+
+        logger.info("HWP components imported using src.tools prefix")
+    except ImportError as e2:
+        logger.error(f"Could not find HWP components in any path: {str(e2)}")
+        print(f"Error: Could not find HWP components", file=sys.stderr)
+        sys.exit(1)
+
 
 # Try to import HwpController
 try:
     from src.tools.hwp_controller import HwpController
-    logger.info("HwpController imported successfully")
+    from src.tools.hwp_table_tools import HwpTableTools
+
+    logger.info("HWP components imported successfully")
 except ImportError as e:
-    logger.error(f"Failed to import HwpController: {str(e)}")
-    # Try alternate paths
+    logger.error(f"Failed to import HWP components: {str(e)}")
+    # Try alternate paths as fallback
     try:
         sys.path.append(os.path.join(current_dir, "src"))
-        sys.path.append(os.path.join(current_dir, "src", "tools"))
-        from hwp_controller import HwpController
-        logger.info("HwpController imported from alternate path")
-    except ImportError as e2:
-        logger.error(f"Could not find HwpController in any path: {str(e2)}")
-        print(f"Error: Could not find HwpController module", file=sys.stderr)
-        sys.exit(1)
+        from tools.hwp_controller import HwpController
+        from tools.hwp_table_tools import HwpTableTools
 
-# Try to import HwpTableTools
-try:
-    from src.tools.hwp_table_tools import HwpTableTools
-    logger.info("HwpTableTools imported successfully")
-except ImportError as e:
-    logger.error(f"Failed to import HwpTableTools: {str(e)}")
-    # Try alternate paths
-    try:
-        from hwp_table_tools import HwpTableTools
-        logger.info("HwpTableTools imported from alternate path")
+        logger.info("HWP components imported from alternate path")
     except ImportError as e2:
-        logger.error(f"Could not find HwpTableTools in any path: {str(e2)}")
-        print(f"Error: Could not find HwpTableTools module", file=sys.stderr)
+        logger.error(f"Could not find HWP components in any path: {str(e2)}")
+        print(f"Error: Could not find HWP components", file=sys.stderr)
         sys.exit(1)
 
 # Initialize FastMCP server
 mcp = FastMCP(
     "hwp-mcp",
     instructions="HWP MCP Server for controlling Hangul Word Processor",
-    dependencies=["pywin32>=305"]
+    dependencies=["pywin32>=305"],
 )
+
 
 # Global HWP controller instance
 hwp_controller = None
 # Global HWP table tools instance
 hwp_table_tools = None
+
 
 def get_hwp_controller():
     """Get or create HwpController instance. Auto-reconnects if connection is lost."""
@@ -115,6 +138,7 @@ def get_hwp_controller():
             return None
     return hwp_controller
 
+
 def get_hwp_table_tools():
     """Get or create HwpTableTools instance."""
     global hwp_table_tools, hwp_controller
@@ -124,6 +148,7 @@ def get_hwp_table_tools():
             hwp_table_tools = HwpTableTools(hwp_controller)
     return hwp_table_tools
 
+
 @mcp.tool()
 def hwp_create() -> str:
     """Create a new HWP document."""
@@ -131,7 +156,7 @@ def hwp_create() -> str:
         hwp = get_hwp_controller()
         if not hwp:
             return "Error: Failed to connect to HWP program"
-        
+
         if hwp.create_new_document():
             logger.info("Successfully created new document")
             return "New document created successfully"
@@ -140,6 +165,7 @@ def hwp_create() -> str:
     except Exception as e:
         logger.error(f"Error creating document: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
+
 
 @mcp.tool()
 def hwp_list_tabs() -> str:
@@ -171,6 +197,7 @@ def hwp_list_tabs() -> str:
         logger.error(f"Error listing documents: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
 
+
 @mcp.tool()
 def hwp_switch_tab(index: int) -> str:
     """
@@ -197,6 +224,7 @@ def hwp_switch_tab(index: int) -> str:
         logger.error(f"Error switching document: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
 
+
 @mcp.tool()
 def hwp_list_windows() -> str:
     """
@@ -221,12 +249,15 @@ def hwp_list_windows() -> str:
         result = f"HWP 인스턴스 ({len(instances)}개):\n"
         for inst in instances:
             marker = "→ " if inst["is_current"] else "  "
-            result += f"{marker}[{inst['index']}] {inst['title']} (hwnd: {inst['hwnd']})\n"
+            result += (
+                f"{marker}[{inst['index']}] {inst['title']} (hwnd: {inst['hwnd']})\n"
+            )
 
         return result
     except Exception as e:
         logger.error(f"Error listing HWP instances: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
+
 
 @mcp.tool()
 def hwp_switch_window(hwnd: int) -> str:
@@ -254,6 +285,7 @@ def hwp_switch_window(hwnd: int) -> str:
         logger.error(f"Error connecting to HWP instance: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
 
+
 @mcp.tool()
 def hwp_close_window(hwnd: int) -> str:
     """
@@ -280,17 +312,18 @@ def hwp_close_window(hwnd: int) -> str:
         logger.error(f"Error closing HWP window: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
 
+
 @mcp.tool()
 def hwp_open(path: str) -> str:
     """Open an existing HWP document."""
     try:
         if not path:
             return "Error: File path is required"
-        
+
         hwp = get_hwp_controller()
         if not hwp:
             return "Error: Failed to connect to HWP program"
-        
+
         if hwp.open_document(path):
             logger.info(f"Successfully opened document: {path}")
             return f"Document opened: {path}"
@@ -300,14 +333,15 @@ def hwp_open(path: str) -> str:
         logger.error(f"Error opening document: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
 
+
 @mcp.tool()
-def hwp_save(path: str = None) -> str:
+def hwp_save(path: Optional[str] = None) -> str:
     """Save the current HWP document."""
     try:
         hwp = get_hwp_controller()
         if not hwp:
             return "Error: Failed to connect to HWP program"
-        
+
         if path:
             if hwp.save_document(path):
                 logger.info(f"Successfully saved document to: {path}")
@@ -317,7 +351,9 @@ def hwp_save(path: str = None) -> str:
         else:
             temp_path = os.path.join(os.getcwd(), "temp_document.hwp")
             if hwp.save_document(temp_path):
-                logger.info(f"Successfully saved document to temporary location: {temp_path}")
+                logger.info(
+                    f"Successfully saved document to temporary location: {temp_path}"
+                )
                 return f"Document saved to: {temp_path}"
             else:
                 return "Error: Failed to save document"
@@ -325,13 +361,14 @@ def hwp_save(path: str = None) -> str:
         logger.error(f"Error saving document: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
 
+
 @mcp.tool()
 def hwp_insert_text(text: str, preserve_linebreaks: bool = True) -> str:
     """Insert text at the current cursor position."""
     try:
         if not text:
             return "Error: Text is required"
-        
+
         hwp = get_hwp_controller()
         if not hwp:
             return "Error: Failed to connect to HWP program"
@@ -347,11 +384,11 @@ def hwp_insert_text(text: str, preserve_linebreaks: bool = True) -> str:
             is_in_table = False
 
         # 줄바꿈 문자 처리
-        if preserve_linebreaks and ('\n' in text or '\\n' in text):
+        if preserve_linebreaks and ("\n" in text or "\\n" in text):
             # 이스케이프된 줄바꿈 문자(\n)와 실제 줄바꿈 문자 모두 처리
-            processed_text = text.replace('\\n', '\n')
-            lines = processed_text.split('\n')
-            
+            processed_text = text.replace("\\n", "\n")
+            lines = processed_text.split("\n")
+
             success = True
             for i, line in enumerate(lines):
                 if not hwp.insert_text(line):
@@ -360,7 +397,7 @@ def hwp_insert_text(text: str, preserve_linebreaks: bool = True) -> str:
                 # 마지막 줄이 아니면 줄바꿈 삽입
                 if i < len(lines) - 1:
                     hwp.insert_paragraph()
-            
+
             if success:
                 logger.info("Successfully inserted text with line breaks")
                 return "Text with line breaks inserted successfully"
@@ -384,21 +421,22 @@ def hwp_insert_text(text: str, preserve_linebreaks: bool = True) -> str:
         logger.error(f"Error inserting text: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
 
+
 @mcp.tool()
 def hwp_set_font(
-    name: str = None, 
-    size: int = None, 
-    bold: bool = False, 
-    italic: bool = False, 
+    name: Optional[str] = None,
+    size: Optional[int] = None,
+    bold: bool = False,
+    italic: bool = False,
     underline: bool = False,
-    select_previous_text: bool = False
+    select_previous_text: bool = False,
 ) -> str:
     """Set font properties for selected text."""
     try:
         hwp = get_hwp_controller()
         if not hwp:
             return "Error: Failed to connect to HWP program"
-        
+
         # 현재 선택된 텍스트에 대해 글자 모양 설정
         if hwp.set_font_style(
             font_name=name,
@@ -406,16 +444,17 @@ def hwp_set_font(
             bold=bold,
             italic=italic,
             underline=underline,
-            select_previous_text=select_previous_text
+            select_previous_text=select_previous_text,
         ):
             logger.info("Successfully set font")
             return "Font set successfully"
         else:
             return "Error: Failed to set font"
-    
+
     except Exception as e:
         logger.error(f"Error setting font: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
+
 
 @mcp.tool()
 def hwp_insert_table(rows: int, cols: int) -> str:
@@ -425,11 +464,12 @@ def hwp_insert_table(rows: int, cols: int) -> str:
         table_tools = get_hwp_table_tools()
         if not table_tools:
             return "Error: Failed to get table tools instance"
-        
+
         return table_tools.insert_table(rows, cols)
     except Exception as e:
         logger.error(f"Error inserting table: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
+
 
 @mcp.tool()
 def hwp_insert_paragraph() -> str:
@@ -438,7 +478,7 @@ def hwp_insert_paragraph() -> str:
         hwp = get_hwp_controller()
         if not hwp:
             return "Error: Failed to connect to HWP program"
-        
+
         if hwp.insert_paragraph():
             logger.info("Successfully inserted paragraph")
             return "Paragraph inserted successfully"
@@ -448,6 +488,7 @@ def hwp_insert_paragraph() -> str:
         logger.error(f"Error inserting paragraph: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
 
+
 @mcp.tool()
 def hwp_get_text() -> str:
     """Get the text content of the current document."""
@@ -455,7 +496,7 @@ def hwp_get_text() -> str:
         hwp = get_hwp_controller()
         if not hwp:
             return "Error: Failed to connect to HWP program"
-        
+
         text = hwp.get_text()
         if text is not None:
             logger.info("Successfully retrieved document text")
@@ -465,6 +506,7 @@ def hwp_get_text() -> str:
     except Exception as e:
         logger.error(f"Error getting text: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
+
 
 @mcp.tool()
 def hwp_close_document(save: bool = False, suppress_dialog: bool = True) -> str:
@@ -484,13 +526,16 @@ def hwp_close_document(save: bool = False, suppress_dialog: bool = True) -> str:
             return "Error: HWP is not connected"
 
         if hwp.close_document(save, suppress_dialog):
-            logger.info(f"Successfully closed document (save={save}, suppress_dialog={suppress_dialog})")
+            logger.info(
+                f"Successfully closed document (save={save}, suppress_dialog={suppress_dialog})"
+            )
             return "Document closed successfully"
         else:
             return "Error: Failed to close document"
     except Exception as e:
         logger.error(f"Error closing document: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
+
 
 @mcp.tool()
 def hwp_close_all_documents(save: bool = False, suppress_dialog: bool = True) -> str:
@@ -510,13 +555,16 @@ def hwp_close_all_documents(save: bool = False, suppress_dialog: bool = True) ->
             return "Error: HWP is not connected"
 
         if hwp.close_all_documents(save, suppress_dialog):
-            logger.info(f"Successfully closed all documents (save={save}, suppress_dialog={suppress_dialog})")
+            logger.info(
+                f"Successfully closed all documents (save={save}, suppress_dialog={suppress_dialog})"
+            )
             return "All documents closed successfully"
         else:
             return "Error: Failed to close all documents"
     except Exception as e:
         logger.error(f"Error closing all documents: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
+
 
 @mcp.tool()
 def hwp_undo(count: int = 1) -> str:
@@ -544,6 +592,7 @@ def hwp_undo(count: int = 1) -> str:
         logger.error(f"Error in undo: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
 
+
 @mcp.tool()
 def hwp_redo(count: int = 1) -> str:
     """
@@ -569,6 +618,7 @@ def hwp_redo(count: int = 1) -> str:
     except Exception as e:
         logger.error(f"Error in redo: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
+
 
 @mcp.tool()
 def hwp_find_text(text: str) -> str:
@@ -598,6 +648,7 @@ def hwp_find_text(text: str) -> str:
         logger.error(f"Error finding text: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
 
+
 @mcp.tool()
 def hwp_replace_text(find: str, replace: str, replace_all: bool = True) -> str:
     """
@@ -620,13 +671,16 @@ def hwp_replace_text(find: str, replace: str, replace_all: bool = True) -> str:
             return "Error: Failed to connect to HWP program"
 
         if hwp.replace_text(find, replace, replace_all):
-            logger.info(f"Replaced text: '{find}' -> '{replace}' (replace_all={replace_all})")
+            logger.info(
+                f"Replaced text: '{find}' -> '{replace}' (replace_all={replace_all})"
+            )
             return f"Text replaced: '{find}' -> '{replace}'"
         else:
             return f"Text not found or replace failed: {find}"
     except Exception as e:
         logger.error(f"Error replacing text: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
+
 
 @mcp.tool()
 def hwp_ping_pong(message: str = "핑") -> str:
@@ -654,7 +708,7 @@ def hwp_ping_pong(message: str = "핑") -> str:
         result = {
             "response": response,
             "original_message": message,
-            "timestamp": current_time
+            "timestamp": current_time,
         }
 
         return json.dumps(result, ensure_ascii=False)
@@ -662,17 +716,20 @@ def hwp_ping_pong(message: str = "핑") -> str:
         logger.error(f"핑퐁 테스트 함수 오류: {str(e)}", exc_info=True)
         return f"테스트 오류 발생: {str(e)}"
 
+
 @mcp.tool()
-def hwp_create_table_with_data(rows: int, cols: int, data = None, has_header: bool = False) -> str:
+def hwp_create_table_with_data(
+    rows: int, cols: int, data=None, has_header: bool = False
+) -> str:
     """
     pywin32를 사용하여 현재 커서 위치에 표를 생성하고 데이터를 채웁니다.
-    
+
     Args:
         rows: 표의 행 수
         cols: 표의 열 수
         data: 표에 채울 데이터 (JSON 문자열 또는 파이썬 리스트)
         has_header: 첫 번째 행을 헤더로 처리할지 여부
-        
+
     Returns:
         str: 결과 메시지
     """
@@ -681,7 +738,7 @@ def hwp_create_table_with_data(rows: int, cols: int, data = None, has_header: bo
         table_tools = get_hwp_table_tools()
         if not table_tools:
             return "Error: Failed to get table tools instance"
-        
+
         # 현재 커서가 표 안에 있는지 확인
         hwp = get_hwp_controller()
         is_in_table = False
@@ -698,12 +755,14 @@ def hwp_create_table_with_data(rows: int, cols: int, data = None, has_header: bo
             # 표 생성
             if not table_tools.insert_table(rows, cols):
                 return "Error: Failed to create table"
-        
+
         # 데이터가 있는 경우 표 채우기
         if data is not None:
             # 데이터 형식 로깅
-            logger.info(f"Create table with data type: {type(data)}, data: {str(data)[:100]}...")
-            
+            logger.info(
+                f"Create table with data type: {type(data)}, data: {str(data)[:100]}..."
+            )
+
             # 데이터가 이미 리스트 형태인 경우
             if isinstance(data, list):
                 logger.info("Data is already a list, using directly")
@@ -712,13 +771,17 @@ def hwp_create_table_with_data(rows: int, cols: int, data = None, has_header: bo
             elif isinstance(data, str):
                 try:
                     import json
+
                     try:
                         processed_data = json.loads(data)
-                        logger.info(f"Successfully parsed JSON data with {len(processed_data)} rows")
+                        logger.info(
+                            f"Successfully parsed JSON data with {len(processed_data)} rows"
+                        )
                     except json.JSONDecodeError as e:
                         logger.error(f"JSON 파싱 오류: {str(e)}")
                         try:
                             import ast
+
                             processed_data = ast.literal_eval(data)
                             logger.info(f"Successfully parsed data with literal_eval")
                         except Exception as e2:
@@ -729,42 +792,43 @@ def hwp_create_table_with_data(rows: int, cols: int, data = None, has_header: bo
                     return f"표는 생성되었으나 데이터 파싱 오류: {str(e)}"
             else:
                 return f"표는 생성되었으나 지원되지 않는 데이터 유형: {type(data)}"
-            
+
             # 데이터 구조 유효성 검사
             if not isinstance(processed_data, list):
                 return f"표는 생성되었으나 데이터가 리스트 형식이 아닙니다: {type(processed_data)}"
-            
+
             if len(processed_data) == 0:
                 return "표는 생성되었으나 데이터 리스트가 비어 있습니다."
-            
+
             # 모든 행이 리스트인지 확인 및 변환
             for i, row in enumerate(processed_data):
                 if not isinstance(row, list):
                     logger.warning(f"Row {i} is not a list, converting: {row}")
                     processed_data[i] = [row]
-            
+
             # 모든 데이터를 문자열로 변환
             string_data = []
             for row in processed_data:
                 string_row = [str(cell) if cell is not None else "" for cell in row]
                 string_data.append(string_row)
-            
+
             # 표에 데이터 채우기
             if table_tools.fill_table_with_data(string_data, 1, 1, has_header):
                 return f"표 생성 및 데이터 입력 완료 ({rows}x{cols})"
             else:
                 return "표는 생성되었으나 데이터 입력에 실패했습니다."
-        
+
         return f"표 생성 완료 ({rows}x{cols})"
     except Exception as e:
         logger.error(f"표 생성 중 오류: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
 
+
 @mcp.tool()
 def hwp_create_complete_document(document_spec: dict) -> dict:
     """
     전체 문서를 한 번의 호출로 작성합니다. 문서 구조, 내용 및 서식을 JSON으로 정의하여 전달합니다.
-    
+
     Args:
         document_spec (dict): 문서 사양을 담은 딕셔너리. 다음과 같은 구조를 가집니다:
             {
@@ -788,7 +852,7 @@ def hwp_create_complete_document(document_spec: dict) -> dict:
                 },
                 "save": true                    # 저장 여부 (선택 사항)
             }
-    
+
     Returns:
         dict: 문서 생성 결과
     """
@@ -796,42 +860,45 @@ def hwp_create_complete_document(document_spec: dict) -> dict:
         hwp = get_hwp_controller()
         if not hwp:
             return {"status": "error", "message": "Failed to connect to HWP program"}
-        
+
         # 새 문서 생성
         if not hwp.create_new_document():
             return {"status": "error", "message": "Failed to create new document"}
-        
+
         # 문서 사양 유효성 검사
         if not document_spec:
             return {"status": "error", "message": "Document specification is required"}
-        
+
         if "special_type" in document_spec:
             # 특수 문서 유형 처리 (보고서 등)
             special_type = document_spec["special_type"]
             special_type_name = special_type.get("type", "")
             special_params = special_type.get("params", {})
-            
+
             # 보고서 처리
             if special_type_name == "report":
                 return _create_report(hwp, special_params, document_spec)
-            
+
             # 편지 처리
             elif special_type_name == "letter":
                 return _create_letter(hwp, special_params, document_spec)
-            
+
             else:
-                return {"status": "error", "message": f"Unknown special document type: {special_type_name}"}
-        
+                return {
+                    "status": "error",
+                    "message": f"Unknown special document type: {special_type_name}",
+                }
+
         # 일반 문서 처리
         elif "elements" in document_spec:
             elements = document_spec.get("elements", [])
-            
+
             # 문서 요소 처리
             for element in elements:
                 element_type = element.get("type", "")
                 content = element.get("content", "")
                 properties = element.get("properties", {})
-                
+
                 # 요소 유형에 따른 처리
                 if element_type == "heading":
                     # 제목 스타일 설정
@@ -840,7 +907,7 @@ def hwp_create_complete_document(document_spec: dict) -> dict:
                     hwp.set_font(None, font_size, bold, False)
                     hwp.insert_text(content)
                     hwp.insert_paragraph()
-                
+
                 elif element_type == "text":
                     # 텍스트 스타일 설정
                     font_size = properties.get("font_size", 10)
@@ -848,47 +915,51 @@ def hwp_create_complete_document(document_spec: dict) -> dict:
                     italic = properties.get("italic", False)
                     hwp.set_font(None, font_size, bold, italic)
                     hwp.insert_text(content)
-                
+
                 elif element_type == "paragraph":
                     hwp.insert_paragraph()
-                
+
                 elif element_type == "table":
                     rows = properties.get("rows", 0)
                     cols = properties.get("cols", 0)
                     data = properties.get("data", [])
-                    
+
                     if rows > 0 and cols > 0:
                         hwp.insert_table(rows, cols)
-                        
+
                         # 테이블 데이터 채우기 (구현 필요)
                         # 현재는 표만 생성하고 데이터는 처리하지 않음
-                
+
                 else:
                     logger.warning(f"Unknown element type: {element_type}")
-        
+
         else:
-            return {"status": "error", "message": "Document must contain 'elements' or 'special_type'"}
-        
+            return {
+                "status": "error",
+                "message": "Document must contain 'elements' or 'special_type'",
+            }
+
         # 문서 저장
         if document_spec.get("save", False):
             filename = document_spec.get("filename", "generated_document.hwp")
             if hwp.save_document(filename):
                 return {
-                    "status": "success", 
+                    "status": "success",
                     "message": "Document created and saved successfully",
-                    "saved_path": filename
+                    "saved_path": filename,
                 }
             else:
                 return {
-                    "status": "partial_success", 
-                    "message": "Document created but failed to save"
+                    "status": "partial_success",
+                    "message": "Document created but failed to save",
                 }
-        
+
         return {"status": "success", "message": "Document created successfully"}
-    
+
     except Exception as e:
         logger.error(f"Error creating document: {str(e)}", exc_info=True)
         return {"status": "error", "message": f"Error: {str(e)}"}
+
 
 def _create_report(hwp, params, document_spec):
     """보고서 문서를 생성합니다."""
@@ -896,35 +967,37 @@ def _create_report(hwp, params, document_spec):
         title = params.get("title", "보고서 제목")
         author = params.get("author", "작성자")
         date = params.get("date", time.strftime("%Y년 %m월 %d일"))
-        sections = params.get("sections", [{"title": "섹션 제목", "content": "섹션 내용"}])
-        
+        sections = params.get(
+            "sections", [{"title": "섹션 제목", "content": "섹션 내용"}]
+        )
+
         # 제목 페이지
         hwp.set_font(None, 22, True, False)
         hwp.insert_text(title)
         hwp.insert_paragraph()
         hwp.insert_paragraph()
-        
+
         hwp.set_font(None, 14, False, False)
         hwp.insert_text(f"작성자: {author}")
         hwp.insert_paragraph()
         hwp.insert_text(f"작성일: {date}")
         hwp.insert_paragraph()
         hwp.insert_paragraph()
-        
+
         # 각 섹션
         for section in sections:
             section_title = section.get("title", "")
             section_content = section.get("content", "")
-            
+
             hwp.set_font(None, 16, True, False)
             hwp.insert_text(section_title)
             hwp.insert_paragraph()
-            
+
             hwp.set_font(None, 12, False, False)
             hwp.insert_text(section_content)
             hwp.insert_paragraph()
             hwp.insert_paragraph()
-        
+
         # 문서 저장
         result = {"status": "success", "message": "Report created successfully"}
         if document_spec.get("save", False):
@@ -934,12 +1007,13 @@ def _create_report(hwp, params, document_spec):
             else:
                 result["message"] = "Report created but failed to save"
                 result["status"] = "partial_success"
-        
+
         return result
-    
+
     except Exception as e:
         logger.error(f"Error creating report: {str(e)}", exc_info=True)
         return {"status": "error", "message": f"Error: {str(e)}"}
+
 
 def _create_letter(hwp, params, document_spec):
     """편지 문서를 생성합니다."""
@@ -949,35 +1023,35 @@ def _create_letter(hwp, params, document_spec):
         content = params.get("content", "내용을 입력하세요.")
         sender = params.get("sender", "보내는 사람")
         date = params.get("date", time.strftime("%Y년 %m월 %d일"))
-        
+
         # 제목 (굵게, 크게)
         hwp.set_font(None, 16, True, False)
         hwp.insert_text(title)
         hwp.insert_paragraph()
         hwp.insert_paragraph()
-        
+
         # 받는 사람
         hwp.set_font(None, 12, False, False)
         hwp.insert_text(f"받는 사람: {recipient}")
         hwp.insert_paragraph()
         hwp.insert_paragraph()
-        
+
         # 내용
         hwp.set_font(None, 12, False, False)
         hwp.insert_text(content)
         hwp.insert_paragraph()
         hwp.insert_paragraph()
-        
+
         # 날짜 (오른쪽 정렬)
         # 오른쪽 정렬은 현재 구현되어 있지 않으므로 공백으로 대체
         hwp.set_font(None, 12, False, False)
         hwp.insert_text("".ljust(40) + date)
         hwp.insert_paragraph()
-        
+
         # 보내는 사람 (오른쪽 정렬, 굵게)
         hwp.set_font(None, 12, True, False)
         hwp.insert_text("".ljust(40) + sender)
-        
+
         # 문서 저장
         result = {"status": "success", "message": "Letter created successfully"}
         if document_spec.get("save", False):
@@ -987,25 +1061,32 @@ def _create_letter(hwp, params, document_spec):
             else:
                 result["message"] = "Letter created but failed to save"
                 result["status"] = "partial_success"
-        
+
         return result
-    
+
     except Exception as e:
         logger.error(f"Error creating letter: {str(e)}", exc_info=True)
         return {"status": "error", "message": f"Error: {str(e)}"}
 
+
 @mcp.tool()
-def hwp_create_document_from_text(content: str, title: str = None, format_content: bool = True, save_filename: str = None, preserve_linebreaks: bool = True) -> dict:
+def hwp_create_document_from_text(
+    content: str,
+    title: Optional[str] = None,
+    format_content: bool = True,
+    save_filename: Optional[str] = None,
+    preserve_linebreaks: bool = True,
+) -> dict:
     """
     단일 문자열로 된 텍스트 내용으로 문서를 생성합니다.
-    
+
     Args:
         content (str): 문서 내용 (형식을 자동으로 감지하고 처리)
         title (str, optional): 문서 제목. 없으면 첫 줄을 제목으로 사용.
         format_content (bool): 내용 자동 포맷팅 여부 (줄바꿈, 문단 구분 등)
         save_filename (str, optional): 저장할 파일 이름. 제공되지 않으면 저장하지 않음.
         preserve_linebreaks (bool): 줄바꿈 유지 여부. True이면 원본 텍스트의 모든 줄바꿈 유지.
-        
+
     Returns:
         dict: 문서 생성 결과
     """
@@ -1013,22 +1094,22 @@ def hwp_create_document_from_text(content: str, title: str = None, format_conten
         hwp = get_hwp_controller()
         if not hwp:
             return {"status": "error", "message": "Failed to connect to HWP program"}
-        
+
         # 새 문서 생성
         if not hwp.create_new_document():
             return {"status": "error", "message": "Failed to create new document"}
-        
+
         # 내용이 없는 경우
         if not content:
             return {"status": "error", "message": "Document content is required"}
-        
+
         # 내용을 줄로 분리
-        lines = content.split('\n')
-        
+        lines = content.split("\n")
+
         # 빈 줄을 기준으로 블록 구분
         blocks = []
         current_block = []
-        
+
         for line in lines:
             if line.strip():  # 빈 줄이 아닌 경우
                 current_block.append(line)
@@ -1036,11 +1117,11 @@ def hwp_create_document_from_text(content: str, title: str = None, format_conten
                 if current_block:
                     blocks.append(current_block)
                     current_block = []
-        
+
         # 마지막 블록 추가
         if current_block:
             blocks.append(current_block)
-        
+
         # 제목 처리
         if not title and blocks:
             # 첫 번째 블록의 첫 번째 줄을 제목으로 사용
@@ -1049,7 +1130,7 @@ def hwp_create_document_from_text(content: str, title: str = None, format_conten
                 blocks[0] = blocks[0][1:]  # 첫 번째 줄 제거
             else:
                 blocks = blocks[1:]  # 첫 번째 블록 제거
-        
+
         # 제목 추가
         if title:
             # 먼저 폰트 설정 후 텍스트 입력 (수정된 방식)
@@ -1057,67 +1138,69 @@ def hwp_create_document_from_text(content: str, title: str = None, format_conten
             hwp.insert_text(title)
             hwp.insert_paragraph()
             hwp.insert_paragraph()
-        
+
         # 내용 자동 포맷팅
         if format_content:
             # 블록 단위로 처리
             for block in blocks:
                 # 블록 내 첫 번째 줄로 블록 유형 판단
                 first_line = block[0].strip() if block else ""
-                
+
                 # 제목 형식 감지 (예: #으로 시작하면 제목)
-                if first_line.startswith('#'):
+                if first_line.startswith("#"):
                     level = 0
                     for char in first_line:
-                        if char == '#':
+                        if char == "#":
                             level += 1
                         else:
                             break
-                    
+
                     heading_text = first_line[level:].strip()
-                    font_size = max(11, 16 - (level - 1))  # 제목 레벨에 따라 글자 크기 조정
-                    
+                    font_size = max(
+                        11, 16 - (level - 1)
+                    )  # 제목 레벨에 따라 글자 크기 조정
+
                     # 먼저 폰트 설정 후 텍스트 입력 (수정된 방식)
                     hwp.set_font(None, font_size, True, False)
                     hwp.insert_text(heading_text)
                     hwp.insert_paragraph()
-                    
+
                     # 제목 이후의 줄들 처리 (있을 경우)
                     if len(block) > 1:
                         hwp.set_font(None, 11, False, False)
                         for line in block[1:]:
                             hwp.insert_text(line)
                             hwp.insert_paragraph()
-                
+
                 # 글머리 기호 감지 (예: - 또는 * 으로 시작하면 글머리 기호)
-                elif first_line.startswith(('-', '*', '•')):
+                elif first_line.startswith(("-", "*", "•")):
                     hwp.set_font(None, 11, False, False)
                     for line in block:
                         line_stripped = line.strip()
-                        if line_stripped.startswith(('-', '*', '•')):
+                        if line_stripped.startswith(("-", "*", "•")):
                             content_text = line_stripped[1:].strip()
                             hwp.insert_text(f"• {content_text}")
                         else:
                             hwp.insert_text(line_stripped)
                         hwp.insert_paragraph()
-                
+
                 # 시 또는 줄바꿈이 중요한 텍스트 (각 줄을 개별적으로 처리)
                 elif preserve_linebreaks:
                     hwp.set_font(None, 11, False, False)
                     for line in block:
                         hwp.insert_text(line)
                         hwp.insert_paragraph()
-                
+
                 # 일반 텍스트 (블록 전체를 하나의 단락으로 처리)
                 else:
                     hwp.set_font(None, 11, False, False)
-                    block_text = '\n'.join(block)
+                    block_text = "\n".join(block)
                     hwp.insert_text(block_text)
                     hwp.insert_paragraph()
-                
+
                 # 블록 사이에 추가 줄바꿈
                 hwp.insert_paragraph()
-        
+
         # 자동 포맷팅 없이 그대로 삽입 (줄바꿈 보존)
         else:
             hwp.set_font(None, 11, False, False)
@@ -1125,34 +1208,38 @@ def hwp_create_document_from_text(content: str, title: str = None, format_conten
                 if line.strip():  # 내용이 있는 줄
                     hwp.insert_text(line)
                 hwp.insert_paragraph()  # 빈 줄이든 내용이 있는 줄이든 항상 줄바꿈
-        
+
         # 문서 저장
-        result = {"status": "success", "message": "Document created from text successfully"}
+        result = {
+            "status": "success",
+            "message": "Document created from text successfully",
+        }
         if save_filename:
             if hwp.save_document(save_filename):
                 result["saved_path"] = save_filename
             else:
                 result["message"] = "Document created but failed to save"
                 result["status"] = "partial_success"
-        
+
         return result
-    
+
     except Exception as e:
         logger.error(f"Error creating document from text: {str(e)}", exc_info=True)
         return {"status": "error", "message": f"Error: {str(e)}"}
+
 
 @mcp.tool()
 def hwp_batch_operations(operations: list) -> dict:
     """
     여러 HWP 작업을 한 번의 호출로 일괄 처리합니다.
-    
+
     Args:
         operations (list): 실행할 작업 목록. 각 작업은 다음 형식의 딕셔너리입니다:
             {
                 "operation": "작업명", # 예: "create", "set_font", "insert_text" 등
                 "params": {파라미터 딕셔너리}  # 해당 작업에 필요한 파라미터
             }
-    
+
     Returns:
         dict: 각 작업의 실행 결과
     """
@@ -1160,15 +1247,15 @@ def hwp_batch_operations(operations: list) -> dict:
         hwp = get_hwp_controller()
         if not hwp:
             return {"status": "error", "message": "Failed to connect to HWP program"}
-        
+
         results = []
-        
+
         for op in operations:
             operation = op.get("operation", "")
             params = op.get("params", {})
-            
+
             result = {"operation": operation, "status": "success", "message": ""}
-            
+
             try:
                 if operation == "create":
                     if hwp.create_new_document():
@@ -1176,7 +1263,7 @@ def hwp_batch_operations(operations: list) -> dict:
                     else:
                         result["status"] = "error"
                         result["message"] = "Failed to create new document"
-                
+
                 elif operation == "open":
                     path = params.get("path", "")
                     if not path:
@@ -1187,7 +1274,7 @@ def hwp_batch_operations(operations: list) -> dict:
                     else:
                         result["status"] = "error"
                         result["message"] = "Failed to open document"
-                
+
                 elif operation == "save":
                     path = params.get("path", None)
                     if path and hwp.save_document(path):
@@ -1203,21 +1290,21 @@ def hwp_batch_operations(operations: list) -> dict:
                     else:
                         result["status"] = "error"
                         result["message"] = "Failed to save document"
-                
+
                 elif operation == "insert_text":
                     text = params.get("text", "")
                     preserve_linebreaks = params.get("preserve_linebreaks", True)
-                    
+
                     if not text:
                         result["status"] = "error"
                         result["message"] = "Text is required"
-                    elif preserve_linebreaks and ('\n' in text or '\\n' in text):
+                    elif preserve_linebreaks and ("\n" in text or "\\n" in text):
                         # 줄바꿈 보존 처리 개선
                         # 이스케이프된 줄바꿈 문자(\n)와 실제 줄바꿈 문자 모두 처리
                         # 먼저 이스케이프된 줄바꿈 문자를 실제 줄바꿈으로 변환
-                        processed_text = text.replace('\\n', '\n')
-                        lines = processed_text.split('\n')
-                        
+                        processed_text = text.replace("\\n", "\n")
+                        lines = processed_text.split("\n")
+
                         success = True
                         for i, line in enumerate(lines):
                             if not hwp.insert_text(line):
@@ -1226,9 +1313,11 @@ def hwp_batch_operations(operations: list) -> dict:
                             # 마지막 줄이 아니면 줄바꿈 삽입
                             if i < len(lines) - 1:
                                 hwp.insert_paragraph()
-                        
+
                         if success:
-                            result["message"] = "Text with line breaks inserted successfully"
+                            result["message"] = (
+                                "Text with line breaks inserted successfully"
+                            )
                         else:
                             result["status"] = "error"
                             result["message"] = "Failed to insert text with line breaks"
@@ -1237,7 +1326,7 @@ def hwp_batch_operations(operations: list) -> dict:
                     else:
                         result["status"] = "error"
                         result["message"] = "Failed to insert text"
-                
+
                 elif operation == "set_font":
                     name = params.get("name", None)
                     size = params.get("size", None)
@@ -1245,13 +1334,20 @@ def hwp_batch_operations(operations: list) -> dict:
                     italic = params.get("italic", False)
                     underline = params.get("underline", False)
                     select_previous_text = params.get("select_previous_text", False)
-                    
-                    if hwp.set_font_style(font_name=name, font_size=size, bold=bold, italic=italic, underline=underline, select_previous_text=select_previous_text):
+
+                    if hwp.set_font_style(
+                        font_name=name,
+                        font_size=size,
+                        bold=bold,
+                        italic=italic,
+                        underline=underline,
+                        select_previous_text=select_previous_text,
+                    ):
                         result["message"] = "Font set successfully"
                     else:
                         result["status"] = "error"
                         result["message"] = "Failed to set font"
-                
+
                 elif operation == "insert_paragraph":
                     count = params.get("count", 1)  # 여러 줄 삽입 가능
                     success = True
@@ -1259,19 +1355,21 @@ def hwp_batch_operations(operations: list) -> dict:
                         if not hwp.insert_paragraph():
                             success = False
                             break
-                    
+
                     if success:
-                        result["message"] = f"{count} paragraph(s) inserted successfully"
+                        result["message"] = (
+                            f"{count} paragraph(s) inserted successfully"
+                        )
                     else:
                         result["status"] = "error"
                         result["message"] = "Failed to insert paragraph"
-                
+
                 elif operation == "insert_table":
                     rows = params.get("rows", 0)
                     cols = params.get("cols", 0)
                     data = params.get("data", [])
                     has_header = params.get("has_header", False)
-                    
+
                     table_tools = get_hwp_table_tools()
                     if not table_tools:
                         result["status"] = "error"
@@ -1282,7 +1380,12 @@ def hwp_batch_operations(operations: list) -> dict:
                     else:
                         # 데이터가 있으면 테이블 생성 후 데이터 채우기
                         if data:
-                            resp = table_tools.create_table_with_data(rows, cols, json.dumps(data) if isinstance(data, list) else data, has_header)
+                            resp = table_tools.create_table_with_data(
+                                rows,
+                                cols,
+                                json.dumps(data) if isinstance(data, list) else data,
+                                has_header,
+                            )
                             result["message"] = resp
                             if resp.startswith("Error"):
                                 result["status"] = "error"
@@ -1291,12 +1394,12 @@ def hwp_batch_operations(operations: list) -> dict:
                             result["message"] = resp
                             if resp.startswith("Error"):
                                 result["status"] = "error"
-                
+
                 elif operation == "set_table_cell_text":
                     row = params.get("row", 0)
                     col = params.get("col", 0)
                     text = params.get("text", "")
-                    
+
                     table_tools = get_hwp_table_tools()
                     if not table_tools:
                         result["status"] = "error"
@@ -1309,26 +1412,30 @@ def hwp_batch_operations(operations: list) -> dict:
                         result["message"] = resp
                         if resp.startswith("Error"):
                             result["status"] = "error"
-                
+
                 elif operation == "merge_table_cells":
                     start_row = params.get("start_row", 0)
                     start_col = params.get("start_col", 0)
                     end_row = params.get("end_row", 0)
                     end_col = params.get("end_col", 0)
-                    
+
                     table_tools = get_hwp_table_tools()
                     if not table_tools:
                         result["status"] = "error"
                         result["message"] = "Failed to get table tools instance"
-                    elif start_row <= 0 or start_col <= 0 or end_row <= 0 or end_col <= 0:
+                    elif (
+                        start_row <= 0 or start_col <= 0 or end_row <= 0 or end_col <= 0
+                    ):
                         result["status"] = "error"
                         result["message"] = "Valid cell coordinates are required"
                     else:
-                        resp = table_tools.merge_cells(start_row, start_col, end_row, end_col)
+                        resp = table_tools.merge_cells(
+                            start_row, start_col, end_row, end_col
+                        )
                         result["message"] = resp
                         if resp.startswith("Error"):
                             result["status"] = "error"
-                
+
                 elif operation == "get_text":
                     text = hwp.get_text()
                     if text is not None:
@@ -1337,7 +1444,7 @@ def hwp_batch_operations(operations: list) -> dict:
                     else:
                         result["status"] = "error"
                         result["message"] = "Failed to retrieve text"
-                
+
                 elif operation == "close":
                     save = params.get("save", True)
                     if hwp.disconnect():
@@ -1348,7 +1455,7 @@ def hwp_batch_operations(operations: list) -> dict:
                     else:
                         result["status"] = "error"
                         result["message"] = "Failed to close document"
-                
+
                 # 새로 추가: 문서 한 번에 생성
                 elif operation == "create_document_from_text":
                     content = params.get("content", "")
@@ -1356,7 +1463,7 @@ def hwp_batch_operations(operations: list) -> dict:
                     format_content = params.get("format_content", True)
                     save_filename = params.get("save_filename", None)
                     preserve_linebreaks = params.get("preserve_linebreaks", True)
-                    
+
                     if not content:
                         result["status"] = "error"
                         result["message"] = "Document content is required"
@@ -1367,41 +1474,124 @@ def hwp_batch_operations(operations: list) -> dict:
                             title=title,
                             format_content=format_content,
                             save_filename=save_filename,
-                            preserve_linebreaks=preserve_linebreaks
+                            preserve_linebreaks=preserve_linebreaks,
                         )
-                        
+
                         result["status"] = doc_result.get("status", "error")
                         result["message"] = doc_result.get("message", "Unknown error")
                         if "saved_path" in doc_result:
                             result["saved_path"] = doc_result["saved_path"]
-                
+
                 else:
                     result["status"] = "error"
                     result["message"] = f"Unknown operation: {operation}"
-            
+
             except Exception as e:
                 result["status"] = "error"
                 result["message"] = f"Error in operation '{operation}': {str(e)}"
-            
+
             results.append(result)
-        
+
         return {"status": "success", "results": results}
-    
+
     except Exception as e:
         logger.error(f"Error in batch operations: {str(e)}", exc_info=True)
         return {"status": "error", "message": f"Error: {str(e)}"}
 
+
 @mcp.tool()
-def hwp_fill_table_with_data(data, start_row: int = 1, start_col: int = 1, has_header: bool = False) -> str:
+def hwp_modify_table_with_ai(instruction: str) -> str:
+    """
+    AI(Gemini)를 사용하여 현재 표의 내용을 지시사항에 따라 스마트하게 수정합니다.
+    예: "두 번째 열의 금액에 '원'을 붙여줘", "비고란에 '완료'라고 채워줘"
+
+    Args:
+        instruction: 수정 지시사항
+
+    Returns:
+        str: 처리 결과 메시지
+    """
+    try:
+        hwp = get_hwp_controller()
+        if not hwp:
+            return "Error: Failed to connect to HWP program"
+
+        # 1. 현재 표 텍스트 추출
+        selection_text = hwp.get_current_table_as_text()
+        if not selection_text:
+            return "Error: 현재 커서가 표 안에 없거나 표 내용을 읽을 수 없습니다."
+
+        # 2. AI 서버(plan_table) 호출
+        import requests
+
+        AI_SERVER_PLAN = "http://127.0.0.1:5005/plan_table"
+
+        payload = {"selection_text": selection_text, "instruction": instruction}
+
+        logger.info(f"AI 표 수정 계획 요청: {instruction}")
+        resp = requests.post(AI_SERVER_PLAN, json=payload, timeout=60)
+        resp.raise_for_status()
+        patch = resp.json()
+
+        mode = patch.get("mode")
+        logger.info(f"AI 표 수정 모드: {mode}")
+
+        # 3. 계획에 따른 수정 실행
+        if mode == "rewrite_table":
+            table_data = patch.get("table", [])
+            if not table_data:
+                return "AI가 표를 수정할 필요가 없다고 판단했습니다."
+
+            # 2차원 리스트 형태 확인 및 변환
+            string_data = [[str(c) for c in row] for row in table_data]
+            if hwp.fill_table_with_data(string_data):
+                return "표 전체를 성공적으로 재작성했습니다."
+            else:
+                return "Error: 표 재작성에 실패했습니다."
+
+        elif mode == "update_column":
+            col_idx = patch.get("column", 0)  # 0-based
+            values = patch.get("values", [])
+
+            # HwpController의 fill_table_cell을 순차적으로 호출 (1-based 변환)
+            success_count = 0
+            for i, val in enumerate(values):
+                if hwp.fill_table_cell(i + 1, col_idx + 1, str(val)):
+                    success_count += 1
+
+            return f"특정 열({col_idx + 1}번 열)의 {success_count}개 셀을 수정했습니다."
+
+        elif mode == "update_cells":
+            cells = patch.get("cells", [])
+            success_count = 0
+            for cell in cells:
+                r, c, v = cell.get("row", 0), cell.get("col", 0), cell.get("value", "")
+                if hwp.fill_table_cell(r + 1, c + 1, str(v)):
+                    success_count += 1
+
+            return f"총 {success_count}개의 셀을 지시사항에 따라 수정했습니다."
+
+        else:
+            return f"알 수 없는 수정 모드: {mode}"
+
+    except Exception as e:
+        logger.error(f"AI 표 수정 중 오류: {str(e)}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+def hwp_fill_table_with_data(
+    data, start_row: int = 1, start_col: int = 1, has_header: bool = False
+) -> str:
     """
     이미 존재하는 표에 데이터를 채웁니다.
-    
+
     Args:
         data: 표에 채울 데이터 (JSON 문자열 또는 2차원 리스트)
         start_row: 시작 행 번호 (1부터 시작)
         start_col: 시작 열 번호 (1부터 시작)
         has_header: 첫 번째 행을 헤더로 처리할지 여부
-        
+
     Returns:
         str: 결과 메시지
     """
@@ -1409,13 +1599,13 @@ def hwp_fill_table_with_data(data, start_row: int = 1, start_col: int = 1, has_h
         table_tools = get_hwp_table_tools()
         if not table_tools:
             return "Error: Failed to get table tools instance"
-        
+
         # 데이터 형식 로깅
         logger.info(f"Received data type: {type(data)}, data: {str(data)[:100]}...")
-        
+
         # 데이터 처리
-        processed_data = []
-        
+        processed_data: List[List[Any]] = []
+
         # 이미 리스트 형태인 경우
         if isinstance(data, list):
             logger.info("Data is already a list, processing directly")
@@ -1424,26 +1614,32 @@ def hwp_fill_table_with_data(data, start_row: int = 1, start_col: int = 1, has_h
         elif isinstance(data, str):
             try:
                 import json
-                
+
                 # JSON 파싱 시도
                 try:
                     processed_data = json.loads(data)
-                    logger.info(f"Successfully parsed JSON data with {len(processed_data)} rows")
+                    logger.info(
+                        f"Successfully parsed JSON data with {len(processed_data)} rows"
+                    )
                 except json.JSONDecodeError as e:
                     logger.error(f"JSON 디코딩 오류: {str(e)}")
-                    
+
                     # 특수 케이스: 1부터 10까지 세로로 채우는 요청인 경우
                     if "1부터 10까지" in data and "세로" in data:
                         logger.info("특수 케이스 감지: 1부터 10까지 세로로 채우기")
                         processed_data = []
                         for i in range(1, 11):
                             processed_data.append([str(i)])
+
                     else:
                         # 마지막 시도: 리터럴 평가
                         try:
                             import ast
+
                             processed_data = ast.literal_eval(data)
-                            logger.info(f"Successfully parsed data with literal_eval: {len(processed_data)} rows")
+                            logger.info(
+                                f"Successfully parsed data with literal_eval: {len(processed_data)} rows"
+                            )
                         except Exception as e:
                             logger.debug(f"literal_eval 파싱 실패: {e}")
                             # 단순 문자열을 직접 파싱
@@ -1462,38 +1658,41 @@ def hwp_fill_table_with_data(data, start_row: int = 1, start_col: int = 1, has_h
                 return f"Error: Failed to parse data - {str(e)}"
         else:
             return f"Error: Unsupported data type: {type(data)}"
-        
+
         # 데이터 구조 유효성 검사
         if not isinstance(processed_data, list):
             logger.error(f"Processed data is not a list: {type(processed_data)}")
             return f"Error: Data must be a list, got {type(processed_data)}"
-        
+
         if len(processed_data) == 0:
             logger.error("Empty data list")
             return "Error: Empty data list"
-        
+
         # 모든 행이 리스트인지 확인 및 변환
         for i, row in enumerate(processed_data):
             if not isinstance(row, list):
                 logger.warning(f"Row {i} is not a list, converting to list: {row}")
                 processed_data[i] = [row]  # 리스트가 아닌 항목을 리스트로 변환
-        
+
         # 모든 데이터를 문자열로 변환
         final_data = []
         for row in processed_data:
             final_row = [str(cell) if cell is not None else "" for cell in row]
             final_data.append(final_row)
-        
+
         logger.info(f"Final processed data has {len(final_data)} rows")
-        
+
         # 표에 데이터 채우기
-        result = table_tools.fill_table_with_data(final_data, start_row, start_col, has_header)
+        result = table_tools.fill_table_with_data(
+            final_data, start_row, start_col, has_header
+        )
         logger.info(f"Table filling result: {result}")
         return result
-        
+
     except Exception as e:
         logger.error(f"표 데이터 입력 중 오류: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
+
 
 @mcp.tool()
 def hwp_navigate(direction: str) -> str:
@@ -1524,32 +1723,123 @@ def hwp_navigate(direction: str) -> str:
         return f"Error: {str(e)}"
 
 
+# Global state for pending modifications
+last_table_patch: Optional[Dict[str, Any]] = None
+
+
 @mcp.tool()
-def hwp_find_and_show_cell(text: str) -> str:
+def hwp_preview_table_modification(instruction: str) -> str:
     """
-    텍스트를 찾고 해당 셀의 내용을 반환합니다.
-    표 구조 탐색의 시작점으로 유용합니다.
-
-    Args:
-        text: 찾을 텍스트
-
-    Returns:
-        str: 찾은 셀의 내용
+    AI를 사용하여 표 수정 사항을 미리 보여주고 승인 창을 띄웁니다.
+    기존 내용은 빨간색 취소선으로, 새 내용은 초록색 굵은 글씨로 표시됩니다.
     """
+    global last_table_patch
     try:
         hwp = get_hwp_controller()
         if not hwp:
-            return "Error: HWP 프로그램에 연결할 수 없습니다."
+            return "Error: HWP 연결 실패"
 
-        success, cell_text = hwp.find_and_get_cell(text)
+        selection_text = hwp.get_current_table_as_text()
+        if not selection_text:
+            return "Error: 표 안의 텍스트를 읽을 수 없습니다. 커서가 표 안에 있는지 확인해 주세요."
 
-        if success:
-            return f"'{text}' 찾음 → 현재 셀: 「{cell_text}」"
+        import requests
+
+        resp = requests.post(
+            "http://127.0.0.1:5005/plan_table",
+            json={"selection_text": selection_text, "instruction": instruction},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        last_table_patch = resp.json()
+
+        patch = last_table_patch or {}
+        mode = patch.get("mode")
+        success_count = 0
+
+        def move_to_cell(row_1_based: int, col_1_based: int) -> None:
+            hwp._move_to_top_left_cell()
+            for _ in range(max(0, row_1_based - 1)):
+                hwp.hwp.Run("TableLowerCell")
+            for _ in range(max(0, col_1_based - 1)):
+                hwp.hwp.Run("TableRightCell")
+            hwp._set_table_cursor()
+
+        if mode == "update_cells":
+            for cell in patch.get("cells", []):
+                r = cell.get("row", 0) + 1
+                c = cell.get("col", 0) + 1
+                v = str(cell.get("value", ""))
+
+                old_val = hwp.get_table_cell_text(r, c)
+                move_to_cell(r, c)
+                hwp.clear_cell_content()
+                hwp.insert_diff_text(old_val, v)
+                success_count += 1
+
+        elif mode == "rewrite_table":
+            table_data = patch.get("table", [])
+            for r_idx, row in enumerate(table_data, start=1):
+                for c_idx, new_val in enumerate(row, start=1):
+                    old_val = hwp.get_table_cell_text(r_idx, c_idx)
+                    if old_val != str(new_val):
+                        move_to_cell(r_idx, c_idx)
+                        hwp.clear_cell_content()
+                        hwp.insert_diff_text(old_val, str(new_val))
+                        success_count += 1
         else:
-            return f"Error: {cell_text}"
+            return f"지원되지 않는 모드({mode})입니다."
+
+        return (
+            f"미리보기 완료: {success_count}개 셀 변경 표시됨. "
+            "적용은 `hwp_finalize_modification`, 취소는 `hwp_cancel_modification` 호출"
+        )
 
     except Exception as e:
-        logger.error(f"찾기 오류: {str(e)}", exc_info=True)
+        logger.error(f"Preview 실패: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+def hwp_finalize_modification() -> str:
+    """미리보기로 표시된 변경 사항을 최종 승인하고 표를 깨끗하게 정리합니다."""
+    global last_table_patch
+    if not last_table_patch:
+        return "Error: 승인할 대기 중인 변경 사항이 없습니다."
+
+    try:
+        hwp = get_hwp_controller()
+        mode = last_table_patch.get("mode")
+
+        if mode == "update_cells":
+            for cell in last_table_patch.get("cells", []):
+                r, c, v = (
+                    cell.get("row", 0) + 1,
+                    cell.get("col", 0) + 1,
+                    str(cell.get("value", "")),
+                )
+                hwp.fill_table_cell(r, c, v)  # 깨끗하게 최종 값만 입력
+
+            last_table_patch = None
+            return "변경 사항이 성공적으로 최종 적용되었습니다."
+
+        return "지원되지 않는 모드입니다."
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+def hwp_cancel_modification() -> str:
+    """미리보기로 표시된 변경 사항을 취소하고 이전 상태로 되돌립니다."""
+    try:
+        hwp = get_hwp_controller()
+        # 여러 번의 수정을 취소해야 할 수 있으므로 Undo를 활용하거나
+        # 혹은 단순히 수동으로 복구하는 로직이 필요할 수 있습니다.
+        # 여기서는 가장 확실한 Undo 3회를 시도합니다 (셀선택, 삭제, 삽입 단계)
+        for _ in range(5):
+            hwp.undo()
+        return "미리보기가 취소되고 이전 상태로 복구되었습니다."
+    except Exception as e:
         return f"Error: {str(e)}"
 
 
@@ -1609,10 +1899,7 @@ def hwp_table_view(depth: int = 1) -> dict:
 
 
 @mcp.tool()
-def hwp_fill_cells(
-    path_value_map: dict,
-    mode: str = "replace"
-) -> str:
+def hwp_fill_cells(path_value_map: dict, mode: str = "replace") -> str:
     """
     표에서 경로를 따라 셀에 값을 입력합니다. 단일/배치 자동 인식.
 
@@ -1703,16 +1990,18 @@ def hwp_fill_cells(
 
 
 @mcp.tool()
-def hwp_fill_column_numbers(start: int = 1, end: int = 10, column: int = 1, from_first_cell: bool = True) -> str:
+def hwp_fill_column_numbers(
+    start: int = 1, end: int = 10, column: int = 1, from_first_cell: bool = True
+) -> str:
     """
     표의 특정 열에 시작 숫자부터 끝 숫자까지 세로로 채웁니다.
-    
+
     Args:
         start: 시작 숫자 (기본값: 1)
         end: 끝 숫자 (기본값: 10)
         column: 숫자를 채울 열 번호 (1부터 시작, 기본값: 1)
         from_first_cell: 정확히 표의 첫 번째 셀부터 시작할지 여부 (기본값: True)
-    
+
     Returns:
         str: 결과 메시지
     """
@@ -1721,40 +2010,41 @@ def hwp_fill_column_numbers(start: int = 1, end: int = 10, column: int = 1, from
         hwp = get_hwp_controller()
         if not hwp:
             return "Error: Failed to connect to HWP program"
-        
+
         # 표 선택 (현재 커서 위치에 표가 있어야 함)
         logger.info(f"테이블 열에 숫자 채우기: 열 {column}, {start}부터 {end}까지")
-        
+
         # 표의 첫 번째 셀로 이동 (문서의 표 맨 앞)
         hwp.hwp.Run("TableColBegin")
-        
+
         # from_first_cell이 False인 경우에만 아래로 이동
         if not from_first_cell:
             hwp.hwp.Run("TableLowerCell")
-        
+
         # 지정된 열로 이동
         for _ in range(column - 1):
             hwp.hwp.Run("TableRightCell")
-        
+
         # 각 행에 숫자 채우기
         for num in range(start, end + 1):
             # 셀 선택 및 내용 지우기
             hwp.hwp.Run("Select")
             hwp.hwp.Run("Delete")
-            
+
             # 셀에 숫자 입력
             hwp.insert_text(str(num))
-            
+
             # 다음 행으로 이동 (마지막 행이 아닌 경우)
             if num < end:
                 hwp.hwp.Run("TableLowerCell")
-        
+
         logger.info(f"테이블 열({column})에 숫자 {start}~{end} 입력 완료")
         return f"테이블 열({column})에 숫자 {start}~{end} 입력 완료"
-        
+
     except Exception as e:
         logger.error(f"테이블 숫자 채우기 오류: {str(e)}", exc_info=True)
         return f"Error: {str(e)}"
+
 
 if __name__ == "__main__":
     logger.info("Starting HWP MCP stdio server")
@@ -1764,4 +2054,4 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Error running server: {str(e)}", exc_info=True)
         print(f"Error: {str(e)}", file=sys.stderr)
-        sys.exit(1) 
+        sys.exit(1)
