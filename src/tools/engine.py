@@ -23,6 +23,7 @@ import requests
 
 from .hwp_controller import HwpController
 from .hwp_table_tools import HwpTableTools, parse_table_data
+from state.session_store import SessionStore
 
 AI_SERVER_REWRITE = "http://127.0.0.1:5005/rewrite"
 AI_SERVER_PLAN_TABLE = "http://127.0.0.1:5005/plan_table"
@@ -32,6 +33,9 @@ Mode = Literal["rewrite", "summarize", "extend", "table"]
 _current_hwp: Optional[HwpController] = None
 _current_path: Optional[str] = None
 _last_table_patch: Optional[Dict[str, Any]] = None
+
+_session_store = SessionStore()
+_active_preview_changeset_id: Optional[str] = None
 
 
 def _normalize_patch_to_cells(patch: Dict[str, Any]) -> list[dict[str, Any]]:
@@ -888,3 +892,127 @@ def apply_text_to_selection_via_clipboard(new_text: str) -> None:
         win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
     except Exception as e_keys:
         print(f"[ENGINE] Ctrl+V 키 이벤트 전송 실패: {e_keys}")
+
+
+# ------------------------------
+# ChangeSet workflow (Phase 1)
+# ------------------------------
+
+def create_selection_changeset(instruction: str) -> str:
+    selection_text = get_selection_text_via_clipboard()
+    if not selection_text:
+        raise RuntimeError("No selected text")
+
+    prompt = selection_text if not instruction else f"{selection_text}\n요청: {instruction}"
+    rewritten = _call_ai_server(prompt, mode="rewrite")
+
+    cs = _session_store.create(
+        kind="text",
+        prompt=instruction or "rewrite",
+        before=selection_text,
+        after=rewritten,
+        diff={},
+    )
+    return cs.id
+
+
+def preview_selection_changeset(changeset_id: str) -> str:
+    global _active_preview_changeset_id
+    cs = _session_store.get(changeset_id)
+    if not cs:
+        raise RuntimeError(f"ChangeSet not found: {changeset_id}")
+    if cs.kind != "text":
+        raise RuntimeError("Only text changeset supported")
+
+    apply_text_to_selection_diff(str(cs.before), str(cs.after))
+    _session_store.update_status(changeset_id, "previewed")
+    _active_preview_changeset_id = changeset_id
+    return "Text diff preview ready"
+
+
+def create_table_changeset(instruction: str) -> str:
+    hwp = ensure_connected()
+    selection_text = hwp.get_current_table_as_text()
+    if not selection_text:
+        raise RuntimeError("Failed to read current table text")
+
+    patch = _call_table_planner(selection_text, instruction)
+    normalized = _normalize_patch_to_cells(patch)
+
+    preview_cells: list[dict[str, Any]] = []
+    dedup: Dict[tuple[int, int], str] = {}
+    for item in normalized:
+        dedup[(int(item["row"]), int(item["col"]))] = str(item["new"])
+
+    for (r, c), new_val in dedup.items():
+        old_val = hwp.get_table_cell_text(r, c)
+        if old_val == new_val:
+            continue
+        preview_cells.append({"row": r, "col": c, "old": old_val, "new": new_val})
+
+    cs = _session_store.create(
+        kind="table",
+        prompt=instruction or "table patch",
+        before={"selection_text": selection_text},
+        after={"cells": preview_cells},
+        diff={"table_cells": preview_cells},
+    )
+    return cs.id
+
+
+def preview_table_changeset(changeset_id: str) -> str:
+    cs = _session_store.get(changeset_id)
+    if not cs:
+        raise RuntimeError(f"ChangeSet not found: {changeset_id}")
+    if cs.kind != "table":
+        raise RuntimeError("Only table changeset supported")
+
+    _session_store.update_status(changeset_id, "previewed")
+    cells = (cs.diff or {}).get("table_cells", [])
+    return f"Table preview ready: {len(cells)} cells"
+
+
+def approve_changeset(changeset_id: str) -> str:
+    cs = _session_store.get(changeset_id)
+    if not cs:
+        raise RuntimeError(f"ChangeSet not found: {changeset_id}")
+
+    hwp = ensure_connected()
+
+    if cs.kind == "text":
+        hwp.hwp.Run("Undo")
+        hwp.insert_text(str(cs.after))
+        _session_store.update_status(changeset_id, "applied")
+        return "텍스트 변경 적용 완료"
+
+    if cs.kind == "table":
+        cells = (cs.diff or {}).get("table_cells", [])
+        for cell in cells:
+            r = int(cell.get("row", 1))
+            c = int(cell.get("col", 1))
+            new_val = str(cell.get("new", ""))
+            hwp.fill_table_cell(r, c, new_val)
+        _session_store.update_status(changeset_id, "applied")
+        return f"표 변경 적용 완료 ({len(cells)}개 셀)"
+
+    raise RuntimeError(f"Unsupported changeset kind: {cs.kind}")
+
+
+def reject_changeset(changeset_id: str) -> str:
+    cs = _session_store.get(changeset_id)
+    if not cs:
+        raise RuntimeError(f"ChangeSet not found: {changeset_id}")
+
+    hwp = ensure_connected()
+
+    if cs.kind == "text":
+        hwp.hwp.Run("Undo")
+        hwp.hwp.Run("Undo")
+        _session_store.update_status(changeset_id, "rejected")
+        return "텍스트 변경 거절(원복) 완료"
+
+    if cs.kind == "table":
+        _session_store.update_status(changeset_id, "rejected")
+        return "표 변경 거절 완료"
+
+    raise RuntimeError(f"Unsupported changeset kind: {cs.kind}")
