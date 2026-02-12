@@ -956,7 +956,12 @@ def preview_selection_changeset(changeset_id: str) -> str:
 
 def create_table_changeset(instruction: str) -> str:
     hwp = ensure_connected()
-    selection_text = hwp.get_current_table_as_text()
+
+    # 우선 사용자가 드래그한 표 영역을 우선 사용 (방향과 무관하게 clipboard 기준)
+    selection_text = get_selection_text_via_clipboard()
+    if not selection_text or ("\t" not in selection_text and "\n" not in selection_text):
+        selection_text = hwp.get_current_table_as_text()
+
     if not selection_text:
         raise RuntimeError("Failed to read current table text")
 
@@ -994,9 +999,19 @@ def preview_table_changeset(changeset_id: str) -> str:
     if cs.kind != "table":
         raise RuntimeError("Only table changeset supported")
 
-    _session_store.update_status(changeset_id, "previewed")
+    # 문서 자체에 미리보기 반영 (old/new 동시 표기)
+    hwp = ensure_connected()
     cells = (cs.diff or {}).get("table_cells", [])
-    return f"Table preview ready: {len(cells)} cells"
+    for cell in cells:
+        r = int(cell.get("row", 1))
+        c = int(cell.get("col", 1))
+        old_val = str(cell.get("old", ""))
+        new_val = str(cell.get("new", ""))
+        preview_text = f"[-] {old_val}\n[+] {new_val}"
+        hwp.fill_table_cell(r, c, preview_text)
+
+    _session_store.update_status(changeset_id, "previewed")
+    return f"Table preview ready in-document: {len(cells)} cells"
 
 
 def approve_changeset(changeset_id: str) -> str:
@@ -1039,8 +1054,16 @@ def reject_changeset(changeset_id: str) -> str:
         return "텍스트 변경 거절(원복) 완료"
 
     if cs.kind == "table":
+        # 문서 내 미리보기를 원복
+        cells = (cs.diff or {}).get("table_cells", [])
+        for cell in cells:
+            r = int(cell.get("row", 1))
+            c = int(cell.get("col", 1))
+            old_val = str(cell.get("old", ""))
+            hwp.fill_table_cell(r, c, old_val)
+
         _session_store.update_status(changeset_id, "rejected")
-        return "표 변경 거절 완료"
+        return "표 변경 거절 완료 (원복 반영)"
 
     raise RuntimeError(f"Unsupported changeset kind: {cs.kind}")
 
