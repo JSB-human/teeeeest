@@ -194,7 +194,7 @@ class MainWindow(QWidget):
         self.table_preview_button.clicked.connect(self.on_table_preview_clicked)
         self.inline_apply_button.clicked.connect(self.on_apply_clicked)
         self.inline_cancel_button.clicked.connect(self.on_cancel_clicked)
-        self.input_edit.returnPressed.connect(self.on_sel_rewrite_clicked)
+        self.input_edit.returnPressed.connect(self.on_smart_run_clicked)
 
     def log(self, message: str):
         now = datetime.datetime.now().strftime("%H:%M:%S")
@@ -306,6 +306,36 @@ class MainWindow(QWidget):
 
         except Exception as e:
             self.log(f"[ERROR] 실패: {e}")
+
+    def on_smart_run_clicked(self):
+        """자동 분기 실행:
+        - 커서가 표 안 + 프롬프트 있음 -> 표 미리보기
+        - 선택 영역 존재 -> 선택 영역 다듬기
+        - 그 외 -> 안내 메시지
+        """
+        try:
+            instr = self.input_edit.text().strip()
+            hwp = ensure_connected()
+
+            # 1) 표 우선 분기
+            if instr and hwp.is_cursor_in_table():
+                self.on_table_preview_clicked()
+                return
+
+            # 2) 선택 텍스트 분기
+            sel_text = get_selection_text_via_clipboard()
+            if sel_text:
+                self.on_sel_rewrite_clicked()
+                return
+
+            # 3) 아무 조건도 안 맞을 때
+            if not instr:
+                self.log("[INFO] 먼저 프롬프트를 입력해 주세요.")
+            else:
+                self.log("[INFO] 선택 영역이 없고 표 안도 아닙니다. 텍스트를 선택하거나 표 셀에 커서를 두세요.")
+
+        except Exception as e:
+            self.log(f"[ERROR] 자동 분기 실행 실패: {e}")
 
     def on_table_preview_clicked(self):
         instr = self.input_edit.text().strip()
