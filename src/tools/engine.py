@@ -992,6 +992,48 @@ def create_table_changeset(instruction: str) -> str:
     return cs.id
 
 
+def _table_text_to_matrix(table_text: str) -> list[list[str]]:
+    rows = []
+    for line in (table_text or "").splitlines():
+        if "\t" in line:
+            rows.append([c.strip() for c in line.split("\t")])
+        elif line.strip():
+            rows.append([line.strip()])
+    return rows
+
+
+def _matrix_to_tsv(matrix: list[list[str]]) -> str:
+    return "\n".join(["\t".join([str(c) for c in row]) for row in matrix])
+
+
+def _apply_cells_to_matrix(base_matrix: list[list[str]], cells: list[dict[str, Any]], preview: bool = False) -> list[list[str]]:
+    # 깊은 복사
+    matrix = [row[:] for row in base_matrix]
+
+    # 행/열 확장
+    max_r = 0
+    max_c = 0
+    for cell in cells:
+        max_r = max(max_r, int(cell.get("row", 1)))
+        max_c = max(max_c, int(cell.get("col", 1)))
+
+    while len(matrix) < max_r:
+        matrix.append([])
+    for r in range(len(matrix)):
+        while len(matrix[r]) < max_c:
+            matrix[r].append("")
+
+    # 값 반영
+    for cell in cells:
+        r = int(cell.get("row", 1)) - 1
+        c = int(cell.get("col", 1)) - 1
+        old_val = str(cell.get("old", ""))
+        new_val = str(cell.get("new", ""))
+        matrix[r][c] = f"[-] {old_val}\n[+] {new_val}" if preview else new_val
+
+    return matrix
+
+
 def preview_table_changeset(changeset_id: str) -> str:
     cs = _session_store.get(changeset_id)
     if not cs:
@@ -999,16 +1041,15 @@ def preview_table_changeset(changeset_id: str) -> str:
     if cs.kind != "table":
         raise RuntimeError("Only table changeset supported")
 
-    # 문서 자체에 미리보기 반영 (old/new 동시 표기)
-    hwp = ensure_connected()
+    before_text = str((cs.before or {}).get("selection_text", ""))
     cells = (cs.diff or {}).get("table_cells", [])
-    for cell in cells:
-        r = int(cell.get("row", 1))
-        c = int(cell.get("col", 1))
-        old_val = str(cell.get("old", ""))
-        new_val = str(cell.get("new", ""))
-        preview_text = f"[-] {old_val}\n[+] {new_val}"
-        hwp.fill_table_cell(r, c, preview_text)
+
+    base_matrix = _table_text_to_matrix(before_text)
+    preview_matrix = _apply_cells_to_matrix(base_matrix, cells, preview=True)
+    preview_tsv = _matrix_to_tsv(preview_matrix)
+
+    # 선택 영역 전체를 TSV로 덮어써서 표 형태 유지
+    apply_text_to_selection_via_clipboard(preview_tsv)
 
     _session_store.update_status(changeset_id, "previewed")
     return f"Table preview ready in-document: {len(cells)} cells"
@@ -1028,12 +1069,19 @@ def approve_changeset(changeset_id: str) -> str:
         return "텍스트 변경 적용 완료"
 
     if cs.kind == "table":
+        # preview가 이미 들어간 상태라면 한 번 undo 후 최종본 반영
+        try:
+            hwp.hwp.Run("Undo")
+        except Exception:
+            pass
+
+        before_text = str((cs.before or {}).get("selection_text", ""))
         cells = (cs.diff or {}).get("table_cells", [])
-        for cell in cells:
-            r = int(cell.get("row", 1))
-            c = int(cell.get("col", 1))
-            new_val = str(cell.get("new", ""))
-            hwp.fill_table_cell(r, c, new_val)
+        base_matrix = _table_text_to_matrix(before_text)
+        final_matrix = _apply_cells_to_matrix(base_matrix, cells, preview=False)
+        final_tsv = _matrix_to_tsv(final_matrix)
+
+        apply_text_to_selection_via_clipboard(final_tsv)
         _session_store.update_status(changeset_id, "applied")
         return f"표 변경 적용 완료 ({len(cells)}개 셀)"
 
@@ -1054,13 +1102,11 @@ def reject_changeset(changeset_id: str) -> str:
         return "텍스트 변경 거절(원복) 완료"
 
     if cs.kind == "table":
-        # 문서 내 미리보기를 원복
-        cells = (cs.diff or {}).get("table_cells", [])
-        for cell in cells:
-            r = int(cell.get("row", 1))
-            c = int(cell.get("col", 1))
-            old_val = str(cell.get("old", ""))
-            hwp.fill_table_cell(r, c, old_val)
+        # preview는 선택영역 paste 기반이므로 undo로 원복
+        try:
+            hwp.hwp.Run("Undo")
+        except Exception:
+            pass
 
         _session_store.update_status(changeset_id, "rejected")
         return "표 변경 거절 완료 (원복 반영)"
