@@ -1006,6 +1006,13 @@ def _matrix_to_tsv(matrix: list[list[str]]) -> str:
     return "\n".join(["\t".join([str(c) for c in row]) for row in matrix])
 
 
+def _normalize_cell_text(v: Any) -> str:
+    s = "" if v is None else str(v).strip()
+    if s in ("(빈 셀)", "빈 셀", "<빈 셀>", "None"):
+        return ""
+    return s
+
+
 def _apply_cells_to_matrix(base_matrix: list[list[str]], cells: list[dict[str, Any]], preview: bool = False) -> list[list[str]]:
     # 깊은 복사
     matrix = [row[:] for row in base_matrix]
@@ -1027,8 +1034,8 @@ def _apply_cells_to_matrix(base_matrix: list[list[str]], cells: list[dict[str, A
     for cell in cells:
         r = int(cell.get("row", 1)) - 1
         c = int(cell.get("col", 1)) - 1
-        old_val = str(cell.get("old", ""))
-        new_val = str(cell.get("new", ""))
+        old_val = _normalize_cell_text(cell.get("old", ""))
+        new_val = _normalize_cell_text(cell.get("new", ""))
         matrix[r][c] = f"[-] {old_val}\n[+] {new_val}" if preview else new_val
 
     return matrix
@@ -1102,14 +1109,17 @@ def reject_changeset(changeset_id: str) -> str:
         return "텍스트 변경 거절(원복) 완료"
 
     if cs.kind == "table":
-        # preview는 선택영역 paste 기반이므로 undo로 원복
-        try:
-            hwp.hwp.Run("Undo")
-        except Exception:
-            pass
+        # preview는 paste 기반이라 undo를 여러 번 시도해 안전하게 원복
+        undone = 0
+        for _ in range(3):
+            try:
+                hwp.hwp.Run("Undo")
+                undone += 1
+            except Exception:
+                break
 
         _session_store.update_status(changeset_id, "rejected")
-        return "표 변경 거절 완료 (원복 반영)"
+        return f"표 변경 거절 완료 (undo {undone}회)"
 
     raise RuntimeError(f"Unsupported changeset kind: {cs.kind}")
 
