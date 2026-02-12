@@ -42,6 +42,7 @@ from tools.engine import (  # type: ignore
     preview_table_changeset,
     approve_changeset,
     reject_changeset,
+    get_changeset_diff_summary,
 )
 
 
@@ -142,6 +143,12 @@ class MainWindow(QWidget):
         self.selection_label = QLabel("📍 선택: 없음", objectName="SelectionText")
         header_layout.addWidget(self.selection_label)
         
+        # Diff 요약 패널
+        self.diff_summary = QTextEdit(objectName="DiffSummary")
+        self.diff_summary.setReadOnly(True)
+        self.diff_summary.setMaximumHeight(140)
+        self.diff_summary.setPlaceholderText("변경 요약이 여기에 표시됩니다.")
+
         # 채팅 로그
         self.chat_log = QTextEdit(objectName="ChatLog")
         self.chat_log.setReadOnly(True)
@@ -164,6 +171,7 @@ class MainWindow(QWidget):
         self.preview_action_frame.setVisible(False)
 
         right_layout.addWidget(header_panel)
+        right_layout.addWidget(self.diff_summary)
         right_layout.addWidget(self.chat_log, stretch=1)
         right_layout.addWidget(self.preview_action_frame)
         right_layout.addWidget(input_container)
@@ -198,6 +206,31 @@ class MainWindow(QWidget):
         styled_msg = f'<p style="margin-bottom: 8px;"><span style="color: #5F6368;">[{now}]</span> <span style="color: {color};">{message}</span></p>'
         self.chat_log.append(styled_msg)
         self.chat_log.moveCursor(QTextCursor.End)
+
+    def render_diff_summary(self, diff: dict):
+        if not diff:
+            self.diff_summary.setPlainText("변경 요약 없음")
+            return
+
+        kind = diff.get("kind", "unknown")
+        if kind == "text":
+            lines = [
+                f"[TEXT] before={diff.get('chars_before', 0)} / after={diff.get('chars_after', 0)}",
+                f"added={diff.get('chars_added', 0)}, removed={diff.get('chars_removed', 0)}",
+            ]
+            for i, s in enumerate(diff.get("sample_spans", [])[:5], start=1):
+                lines.append(f"{i}. {s.get('tag')} | -{s.get('old','')} | +{s.get('new','')}")
+            self.diff_summary.setPlainText("\n".join(lines))
+            return
+
+        if kind == "table":
+            lines = [f"[TABLE] changed_cells={diff.get('changed_cells', 0)}"]
+            for i, c in enumerate(diff.get("sample_cells", [])[:10], start=1):
+                lines.append(f"{i}. (r{c.get('row')}, c{c.get('col')}): '{c.get('old','')}' -> '{c.get('new','')}'")
+            self.diff_summary.setPlainText("\n".join(lines))
+            return
+
+        self.diff_summary.setPlainText(str(diff))
 
     def set_connected_ui(self, connected: bool):
         if connected:
@@ -265,6 +298,7 @@ class MainWindow(QWidget):
 
             self._current_changeset_id = cs_id
             self._modification_mode = "selection"
+            self.render_diff_summary(get_changeset_diff_summary(cs_id))
 
             self.preview_action_frame.setVisible(True)
             self.preview_action_label.setText("문장에서 변경 사항(빨강/초록)을 확인하세요.")
@@ -284,6 +318,7 @@ class MainWindow(QWidget):
             msg = preview_table_changeset(cs_id)
             self._current_changeset_id = cs_id
             self._modification_mode = "table"
+            self.render_diff_summary(get_changeset_diff_summary(cs_id))
             self.preview_action_frame.setVisible(True)
             self.preview_action_label.setText("표 수정 미리보기가 준비되었습니다.")
             self.log(f"[INFO] {msg} (id={cs_id[:8]})")
@@ -303,6 +338,7 @@ class MainWindow(QWidget):
             self.preview_action_frame.setVisible(False)
             self._modification_mode = None
             self._current_changeset_id = ""
+            self.diff_summary.setPlainText("변경 요약 없음")
 
     def on_cancel_clicked(self):
         try:
@@ -317,6 +353,7 @@ class MainWindow(QWidget):
             self.preview_action_frame.setVisible(False)
             self._modification_mode = None
             self._current_changeset_id = ""
+            self.diff_summary.setPlainText("변경 요약 없음")
 
     # 단순한 기능들
     def on_send_clicked(self):
@@ -387,6 +424,12 @@ def main():
         QLineEdit#MainInput {
             background-color: #303134; border-radius: 20px;
             padding: 10px 20px; font-size: 10.5pt;
+        }
+        QTextEdit#DiffSummary {
+            background-color: #1B1C1F;
+            border-bottom: 1px solid #3C4043;
+            padding: 10px 14px;
+            font-size: 9pt;
         }
         QTextEdit#ChatLog {
             background-color: #202124; border: none;

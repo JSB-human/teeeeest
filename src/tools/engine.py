@@ -24,6 +24,7 @@ import requests
 from .hwp_controller import HwpController
 from .hwp_table_tools import HwpTableTools, parse_table_data
 from state.session_store import SessionStore
+from services.diff_service import build_text_diff_summary, build_table_diff_summary
 
 AI_SERVER_REWRITE = "http://127.0.0.1:5005/rewrite"
 AI_SERVER_PLAN_TABLE = "http://127.0.0.1:5005/plan_table"
@@ -906,12 +907,14 @@ def create_selection_changeset(instruction: str) -> str:
     prompt = selection_text if not instruction else f"{selection_text}\n요청: {instruction}"
     rewritten = _call_ai_server(prompt, mode="rewrite")
 
+    diff = build_text_diff_summary(selection_text, rewritten)
+
     cs = _session_store.create(
         kind="text",
         prompt=instruction or "rewrite",
         before=selection_text,
         after=rewritten,
-        diff={},
+        diff=diff,
     )
     return cs.id
 
@@ -950,12 +953,15 @@ def create_table_changeset(instruction: str) -> str:
             continue
         preview_cells.append({"row": r, "col": c, "old": old_val, "new": new_val})
 
+    table_diff = build_table_diff_summary(preview_cells)
+    table_diff["table_cells"] = preview_cells
+
     cs = _session_store.create(
         kind="table",
         prompt=instruction or "table patch",
         before={"selection_text": selection_text},
         after={"cells": preview_cells},
-        diff={"table_cells": preview_cells},
+        diff=table_diff,
     )
     return cs.id
 
@@ -1016,3 +1022,10 @@ def reject_changeset(changeset_id: str) -> str:
         return "표 변경 거절 완료"
 
     raise RuntimeError(f"Unsupported changeset kind: {cs.kind}")
+
+
+def get_changeset_diff_summary(changeset_id: str) -> Dict[str, Any]:
+    cs = _session_store.get(changeset_id)
+    if not cs:
+        raise RuntimeError(f"ChangeSet not found: {changeset_id}")
+    return cs.diff or {}
