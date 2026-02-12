@@ -98,13 +98,14 @@ class MainWindow(QWidget):
         self.send_button = QPushButton("전체 문서 다듬기")
         
         group_sel = QLabel("🎯 선택 영역", objectName="GroupLabel")
-        self.sel_get_button = QPushButton("선택 영역 가져오기")
-        self.sel_rewrite_button = QPushButton("✨ 선택 영역 다듬기", objectName="PrimaryButton")
-        self.sel_to_table_button = QPushButton("📊 선택 → 표 생성")
+        self.smart_run_button = QPushButton("⚡ 자동 실행 (추천)", objectName="PrimaryButton")
+        self.sel_get_button = QPushButton("[고급] 선택 영역 가져오기")
+        self.sel_rewrite_button = QPushButton("[고급] 선택 영역 다듬기")
+        self.sel_to_table_button = QPushButton("[고급] 선택 → 표 생성")
 
         group_table = QLabel("📅 표 제어", objectName="GroupLabel")
-        self.table_fill_button = QPushButton("📥 입력 → 표 채우기")
-        self.table_preview_button = QPushButton("🔍 표 수정 미리보기")
+        self.table_fill_button = QPushButton("[고급] 입력 → 표 채우기")
+        self.table_preview_button = QPushButton("[고급] 표 수정 미리보기")
 
         # 레이아웃 배치
         left_layout.addWidget(self.app_title)
@@ -120,6 +121,7 @@ class MainWindow(QWidget):
         left_layout.addSpacing(5)
         
         left_layout.addWidget(group_sel)
+        left_layout.addWidget(self.smart_run_button)
         left_layout.addWidget(self.sel_get_button)
         left_layout.addWidget(self.sel_rewrite_button)
         left_layout.addWidget(self.sel_to_table_button)
@@ -187,6 +189,7 @@ class MainWindow(QWidget):
         self.browse_button.clicked.connect(self.on_browse_clicked)
         self.connect_button.clicked.connect(self.on_connect_clicked)
         self.send_button.clicked.connect(self.on_send_clicked)
+        self.smart_run_button.clicked.connect(self.on_smart_run_clicked)
         self.sel_get_button.clicked.connect(self.on_sel_get_clicked)
         self.sel_rewrite_button.clicked.connect(self.on_sel_rewrite_clicked)
         self.sel_to_table_button.clicked.connect(self.on_sel_to_table_clicked)
@@ -239,7 +242,7 @@ class MainWindow(QWidget):
             self.status_label.setText("● Connected")
             self.status_label.setStyleSheet("color: #81C995; font-weight: bold;")
             self.connect_button.setEnabled(False)
-            btns = [self.send_button, self.sel_get_button, self.sel_rewrite_button, 
+            btns = [self.send_button, self.smart_run_button, self.sel_get_button, self.sel_rewrite_button, 
                     self.sel_to_table_button, self.table_fill_button, self.table_preview_button]
             for b in btns: b.setEnabled(True)
         else:
@@ -247,7 +250,7 @@ class MainWindow(QWidget):
             self.status_label.setText("○ Disconnected")
             self.status_label.setStyleSheet("color: #9AA0A6;")
             self.connect_button.setEnabled(True)
-            btns = [self.send_button, self.sel_get_button, self.sel_rewrite_button, 
+            btns = [self.send_button, self.smart_run_button, self.sel_get_button, self.sel_rewrite_button, 
                     self.sel_to_table_button, self.table_fill_button, self.table_preview_button]
             for b in btns: b.setEnabled(False)
 
