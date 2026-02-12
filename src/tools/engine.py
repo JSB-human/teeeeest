@@ -895,6 +895,27 @@ def apply_text_to_selection_via_clipboard(new_text: str) -> None:
         print(f"[ENGINE] Ctrl+V 키 이벤트 전송 실패: {e_keys}")
 
 
+def apply_text_to_selection_diff(old_text: str, new_text: str) -> None:
+    """현재 선택 영역에 Diff 미리보기 텍스트를 삽입한다.
+
+    현재 구현은 HwpController.insert_diff_text를 사용하며,
+    먼저 선택 영역을 삭제한 뒤 diff 텍스트를 주입한다.
+    """
+    import win32api
+    import win32con
+    import time
+
+    hwp = ensure_connected()
+
+    # 선택 영역 삭제
+    win32api.keybd_event(win32con.VK_DELETE, 0, 0, 0)
+    win32api.keybd_event(win32con.VK_DELETE, 0, win32con.KEYEVENTF_KEYUP, 0)
+    time.sleep(0.05)
+
+    # Diff 텍스트 삽입
+    hwp.insert_diff_text(old_text, new_text)
+
+
 # ------------------------------
 # ChangeSet workflow (Phase 1)
 # ------------------------------
